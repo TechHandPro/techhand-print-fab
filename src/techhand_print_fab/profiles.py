@@ -5,6 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 MATERIALS: dict[str, dict[str, Any]] = {
+    "PLA": {
+        "aliases": ("pla", "pla+", "pla-plus"),
+        "nozzle_c": "220 start, 200–230 range",
+        "bed_c": "55–65 on textured PEI. A cool plate can be lower; follow the spool datasheet.",
+        "chamber": "Not required. Leave the door open if the part softens.",
+        "fan": "High after the first layers, often near 100% for overhangs.",
+        "speed": "Faster than PETG is normal. Drop speed if the corners lift or the layers look glossy and weak.",
+        "drying": "Optional. Dry near 45–55 °C if the spool pops or strings.",
+        "nozzle_hardware": "Brass is fine for unfilled PLA. Hardened if the grade is filled or glitter.",
+        "adhesion": "Clean textured PEI. Wash the plate when the first layer lets go.",
+        "watchouts": "PLA softens in a warm car or enclosure. Use PETG or ASA when the part has to stay stiff in heat.",
+    },
     "PETG": {
         "aliases": ("petg",),
         "nozzle_c": "245 start, 230–250 range",
@@ -16,6 +28,18 @@ MATERIALS: dict[str, dict[str, Any]] = {
         "nozzle_hardware": "Brass or hardened. Hardened is worth it if the filament is filled.",
         "adhesion": "Textured PEI is usually enough. Wash the plate when parts release early.",
         "watchouts": "Stringing and moisture show up before a temperature problem does.",
+    },
+    "ABS": {
+        "aliases": ("abs",),
+        "nozzle_c": "260 start, 250–270 range, follow the spool datasheet",
+        "bed_c": "90–100",
+        "chamber": "Keep the printer enclosed. Drafts lift corners.",
+        "fan": "Low, about 0–20%, and only for bridges.",
+        "speed": "Slower on the first layers. Let the chamber warm before a large part.",
+        "drying": "Dry near 80 °C if the spool has been open.",
+        "nozzle_hardware": "Brass is fine for unfilled ABS. Hardened if it is filled.",
+        "adhesion": "Hot PEI and a brim on sharp corners.",
+        "watchouts": "ABS fumes. Ventilate the room. A cold chamber is the usual cause of warp.",
     },
     "ASA": {
         "aliases": ("asa",),
@@ -66,6 +90,14 @@ MATERIALS: dict[str, dict[str, Any]] = {
         "watchouts": "Abrasive and hygroscopic. Plan on a hardened nozzle and a dry spool before tuning speed.",
     },
 }
+
+
+def material_list() -> str:
+    """Human list of the allowlist. The dict above is the only source."""
+    names = list(MATERIALS)
+    if len(names) < 2:
+        return ", ".join(names)
+    return ", ".join(names[:-1]) + ", or " + names[-1]
 
 
 def canonical_material(name: str) -> str | None:

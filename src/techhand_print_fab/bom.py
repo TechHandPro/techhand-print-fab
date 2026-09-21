@@ -5,12 +5,14 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from techhand_print_fab.profiles import canonical_material
+from techhand_print_fab.profiles import canonical_material, material_list
 from techhand_print_fab.spec import ModelSpec, analytic_volume_mm3
 
 # g/cm³, typical unfilled grades. Filled grades vary; the line says so.
 _DENSITY_G_CM3: dict[str, float] = {
+    "PLA": 1.24,
     "PETG": 1.27,
+    "ABS": 1.04,
     "ASA": 1.07,
     "TPU": 1.21,
     "PA": 1.14,
@@ -66,7 +68,7 @@ def bom_sketch(spec: ModelSpec) -> dict[str, Any]:
                     "item": "filament mass",
                     "quantity": None,
                     "unit": "g",
-                    "note": "Set material to PETG, ASA, TPU, PA, or PA-CF for a mass estimate.",
+                    "note": f"Set material to {material_list()} for a mass estimate.",
                 }
             )
         else:

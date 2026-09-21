@@ -6,13 +6,21 @@ from mcp.server import MCPServer
 
 from techhand_print_fab import __version__
 from techhand_print_fab.bridges import load_tnt_bridge, tnt_requested
+from techhand_print_fab.print_tools import register_print_tools
 from techhand_print_fab.tools import register_core_tools
 
 INSTRUCTIONS = """
-Shareable parametric fab tools for original parts.
+Shareable parametric fab tools for original parts, plus an optional Bambu X1 Carbon print push.
 OpenSCAD is the primary model. A CadQuery script can be written next to it and is not executed here.
 Refuse requests to make a 1:1 copy of a proprietary commercial product.
-Exports are files on disk. Never claim a printer job ran. Say that mesh export is dry-fire training output.
+Refuse firearm and other weapon-part print requests. Training-tool and general fab jobs are in scope.
+Design exports are files on disk. Mesh export is dry-fire training output.
+fab_bambu_discover lists host, model, state, and AMS when the printer exposes it.
+fab_bambu_status reads nozzle, bed, and job progress and does not queue a job.
+fab_bambu_push_3mf defaults to dry-run. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.
+printer_dispatched is true only after the printer or Farm Manager accepts the job.
+An unsliced STL or 3MF is a Bambu Studio handoff with X1 Carbon profile notes, and no printer job.
+LAN Developer Mode is the print path. Farm Manager is optional. The cloud API is not used.
 Ticket attach is absent unless the separate TNT extra is installed and TECHHAND_FAB_ENABLE_TNT=1.
 This server does not require TNT.
 """.strip()
@@ -26,6 +34,7 @@ def create_server(*, enable_tnt: bool | None = None) -> MCPServer:
         version=__version__,
     )
     register_core_tools(server)
+    register_print_tools(server)
     if tnt_requested(enable_tnt):
         load_tnt_bridge(server)
     return server

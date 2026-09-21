@@ -120,3 +120,50 @@ def refusal_payload(refusal: Refusal) -> dict[str, object]:
         policy_code=refusal.code,
         message=REFUSAL_MESSAGE,
     )
+
+
+# Print push only. Do not fold these into assess(): the bundled trainer CAD comments
+# say "not a firearm" and must stay importable. "not a firearm" is still a refusal
+# here, so a disclaimer is not permission to queue a weapon part.
+WEAPON_REFUSAL = (
+    "Refused: this server will not queue a firearm or other weapon part. "
+    "Training-tool and general fab jobs are in scope."
+)
+
+_WEAPON_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("firearm", re.compile(r"\bfirearms?\b", _FLAGS)),
+    ("gun", re.compile(r"\bguns?\b", _FLAGS)),
+    ("pistol", re.compile(r"\bpistols?\b", _FLAGS)),
+    ("rifle", re.compile(r"\brifles?\b", _FLAGS)),
+    ("shotgun", re.compile(r"\bshotguns?\b", _FLAGS)),
+    ("revolver", re.compile(r"\brevolvers?\b", _FLAGS)),
+    ("suppressor", re.compile(r"\b(?:suppressors?|silencers?)\b", _FLAGS)),
+    ("ghost_gun", re.compile(r"\bghost[\s-]?guns?\b", _FLAGS)),
+    ("weapon", re.compile(r"\bweapons?\b", _FLAGS)),
+    ("receiver", re.compile(r"\b(?:lower|upper)\s+receivers?\b", _FLAGS)),
+    ("ammunition", re.compile(r"\b(?:ammunition|ammo)\b", _FLAGS)),
+    ("glock", re.compile(r"\bglocks?\b", _FLAGS)),
+    ("ar15", re.compile(r"\bar[\s-]?15\b", _FLAGS)),
+)
+
+
+def assess_weapon(*texts: str) -> Refusal | None:
+    blob = "\n".join(text for text in texts if text)
+    for code, pattern in _WEAPON_PATTERNS:
+        if pattern.search(blob):
+            return Refusal(code=code)
+    return None
+
+
+def screen_weapon(*texts: str) -> dict[str, object] | None:
+    refusal = assess_weapon(*texts)
+    if refusal is None:
+        return None
+    return envelope(
+        ok=False,
+        refused=True,
+        policy="weapon_part",
+        policy_code=refusal.code,
+        message=WEAPON_REFUSAL,
+        mode="print_refused",
+    )

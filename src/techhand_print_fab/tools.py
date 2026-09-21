@@ -17,7 +17,7 @@ from techhand_print_fab.exporting import ExportError, build_mesh, write_mesh_fil
 from techhand_print_fab.openscad_gen import render_openscad
 from techhand_print_fab.paths import bundled_cad_v0, export_roots, import_roots, resolve_under
 from techhand_print_fab.policy import screen
-from techhand_print_fab.profiles import canonical_material, profile_notes
+from techhand_print_fab.profiles import MATERIALS, canonical_material, material_list, profile_notes
 from techhand_print_fab.results import failure, ok
 from techhand_print_fab.scad_source import load_scad_tree_file, scad_parameter_hints
 from techhand_print_fab.spec import SpecError, normalize
@@ -263,7 +263,7 @@ def fab_dfm_check(
 def fab_x1c_profile_notes(
     material: Annotated[
         str,
-        Field(description="PETG, ASA, TPU, or PA. PA-CF is accepted as its own note."),
+        Field(description=f"{material_list()}. Notes are not a slicer profile."),
     ],
     intent: Annotated[str, Field(description="Optional context. Clone requests are refused.")] = "",
 ) -> dict[str, Any]:
@@ -278,8 +278,8 @@ def fab_x1c_profile_notes(
     notes = profile_notes(material)
     if notes is None:
         return failure(
-            "material must be PETG, ASA, TPU, PA, or PA-CF",
-            supported=["PETG", "ASA", "TPU", "PA", "PA-CF"],
+            f"material must be {material_list()}",
+            supported=list(MATERIALS),
         )
     return ok(str(notes["disclaimer"]), **notes)
 
