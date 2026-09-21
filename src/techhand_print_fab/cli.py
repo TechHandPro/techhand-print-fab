@@ -14,7 +14,10 @@ from techhand_print_fab.store import Store, set_store
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="techhand-print-fab",
-        description="Parametric fab MCP. Design and mesh export only. No printer control.",
+        description=(
+            "Parametric fab MCP. Design export, plus optional Bambu X1 Carbon print push "
+            "over LAN Developer Mode or Farm Manager."
+        ),
     )
     parser.add_argument(
         "--http",

@@ -27,3 +27,33 @@ def ok(message: str, **payload: Any) -> dict[str, Any]:
 
 def failure(message: str, **payload: Any) -> dict[str, Any]:
     return envelope(ok=False, refused=False, message=message, **payload)
+
+
+def print_result(
+    *,
+    ok: bool,
+    message: str,
+    printer_dispatched: bool,
+    mode: str,
+    refused: bool = False,
+    **payload: Any,
+) -> dict[str, Any]:
+    """Result for discovery and print push. Design tools keep using envelope()."""
+    if printer_dispatched and not ok:
+        raise RuntimeError("a failed print result cannot say the printer was dispatched")
+    note = (
+        "The printer or Farm Manager accepted this sliced job."
+        if printer_dispatched
+        else "No printer job was confirmed."
+    )
+    body: dict[str, Any] = {
+        "ok": ok,
+        "refused": refused,
+        "dry_fire": not printer_dispatched,
+        "printer_dispatched": printer_dispatched,
+        "mode": mode,
+        "note": note,
+        "message": message,
+    }
+    body.update(payload)
+    return body

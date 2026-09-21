@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "techhand-print-fab": {
+      "command": "techhand-print-fab",
+      "env": {
+        "BAMBU_LAN_HOST": "",
+        "BAMBU_ACCESS_CODE": "",
+        "BAMBU_SERIAL": "",
+        "BAMBU_PRINT_ENABLED": "0",
+        "FAB_EXPORT_ROOTS": ""
+      }
+    }
+  }
+}

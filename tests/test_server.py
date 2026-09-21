@@ -23,6 +23,8 @@ CORE_TOOLS = {
     "fab_dfm_check",
     "fab_x1c_profile_notes",
     "fab_bom_sketch",
+    "fab_discover_printers",
+    "fab_queue_print",
 }
 
 REQUIRED = {
@@ -34,6 +36,8 @@ REQUIRED = {
     "fab_dfm_check": {"project_id", "part_name"},
     "fab_x1c_profile_notes": {"material"},
     "fab_bom_sketch": {"project_id", "part_name"},
+    "fab_discover_printers": set(),
+    "fab_queue_print": set(),
 }
 
 
@@ -44,9 +48,11 @@ def test_tool_schemas_and_instructions(server) -> None:
     for name, required in REQUIRED.items():
         schema = tools[name].input_schema
         assert schema["type"] == "object"
-        assert required <= set(schema["required"])
+        assert required <= set(schema.get("required") or [])
     assert "proprietary" in INSTRUCTIONS.lower()
     assert "dry-fire" in INSTRUCTIONS.lower()
+    assert "developer mode" in INSTRUCTIONS.lower()
+    assert "weapon" in INSTRUCTIONS.lower()
     assert server.instructions == INSTRUCTIONS
 
 
