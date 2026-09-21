@@ -58,6 +58,10 @@ def test_unsliced_stl_is_a_studio_handoff(server, monkeypatch: pytest.MonkeyPatc
     assert result["dry_fire"] is True
     assert result["profile_applied"] is False
     assert result["profile_notes"]["material"] == "PETG"
+    assert result["material"] == "PETG"
+    assert result["bed_type"] == "textured_plate"
+    assert result["nozzle_mm"] == 0.4
+    assert result["printer"] == "Bambu Lab X1 Carbon"
     handoff = Path(result["handoff_dir"])
     assert (handoff / "model.stl").is_file()
     assert "Bambu Studio" in (handoff / "HANDOFF.txt").read_text()

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "techhand-print-fab"
-version = "0.2.0"
-description = "Shareable MCP server for parametric 3D design, mesh export, and optional Bambu X1 Carbon print push. TNT is not required."
+version = "0.3.0"
+description = "Shareable MCP server for parametric 3D design, mesh export, headless slice, and optional Bambu X1 Carbon print push. TNT is not required."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

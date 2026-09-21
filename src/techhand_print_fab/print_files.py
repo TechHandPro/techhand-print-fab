@@ -12,7 +12,12 @@ from typing import Any
 from techhand_print_fab.bambu_config import BambuError
 from techhand_print_fab.bambu_frames import plate_pattern
 from techhand_print_fab.paths import export_roots, resolve_under
-from techhand_print_fab.profiles import material_list, profile_notes
+from techhand_print_fab.profiles import (
+    TARGET_NOZZLE_MM,
+    TARGET_PRINTER,
+    material_list,
+    profile_notes,
+)
 
 MAX_MESH_BYTES = 200 * 1024 * 1024
 _MAX_ZIP_ENTRIES = 400
@@ -24,6 +29,11 @@ class SliceInfo:
     sliced: bool
     plates: tuple[int, ...]
     kind: str
+
+
+def plate_numbers(path: Path) -> tuple[int, ...]:
+    """Plate indexes that have Metadata/plate_N.gcode. Empty when the 3MF is geometry only."""
+    return _plate_numbers(path)
 
 
 def classify_mesh(path: Path) -> SliceInfo:
@@ -55,12 +65,11 @@ def resolve_mesh(
     if not file_path.strip():
         if part_dir is None:
             raise BambuError("Pass project_id and part_name, or file_path to a mesh under FAB_EXPORT_ROOTS.")
-        for candidate_name in ("model.gcode.3mf", "model.3mf", "model.stl"):
-            candidate = part_dir / candidate_name
-            if candidate.is_file() and not candidate.is_symlink():
-                _check_size(candidate)
-                return candidate.resolve()
-        raise BambuError("This part has no model.stl or model.3mf yet. Export it before queueing a print.")
+        chosen = default_model_file(part_dir)
+        if chosen is None:
+            raise BambuError("This part has no model.stl or model.3mf yet. Export it before queueing a print.")
+        _check_size(chosen)
+        return chosen.resolve()
     raw = Path(file_path).expanduser()
     bases: list[Path] = []
     if raw.is_absolute():
@@ -79,12 +88,31 @@ def resolve_mesh(
     raise BambuError("file_path is outside the part directory, the project directory, and FAB_EXPORT_ROOTS.")
 
 
+def default_model_file(part_dir: Path) -> Path | None:
+    """Prefer a sliced file unless a newer geometry mesh is sitting next to it."""
+    gcode = part_dir / "model.gcode.3mf"
+    meshes = [path for path in (part_dir / "model.3mf", part_dir / "model.stl") if _is_real_file(path)]
+    gcode_ok = _is_real_file(gcode)
+    if gcode_ok and meshes:
+        newest = max(meshes, key=lambda path: path.stat().st_mtime_ns)
+        if newest.stat().st_mtime_ns > gcode.stat().st_mtime_ns:
+            return newest
+        return gcode
+    if gcode_ok:
+        return gcode
+    if meshes:
+        return max(meshes, key=lambda path: path.stat().st_mtime_ns)
+    return None
+
+
 def write_handoff(
     source: Path,
     *,
     directory: Path,
     material_notes: dict[str, Any] | None,
     material: str,
+    bed_type: str,
+    detail: str,
 ) -> Path:
     if directory.is_symlink():
         raise BambuError("Refusing to write the Studio handoff through a symlink.")
@@ -104,13 +132,20 @@ def write_handoff(
     notes_path = directory / "x1c-profile-notes.json"
     payload = {
         "material": material,
+        "bed_type": bed_type,
+        "printer": TARGET_PRINTER,
+        "nozzle_mm": TARGET_NOZZLE_MM,
         "profile_applied": False,
         "sliced": False,
         "profile_notes": material_notes,
         "source": source.name,
+        "fallback": detail,
     }
     _write_bytes(notes_path, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
-    _write_bytes(directory / "HANDOFF.txt", _handoff_text(material_notes).encode("utf-8"))
+    _write_bytes(
+        directory / "HANDOFF.txt",
+        _handoff_text(material_notes, material=material, bed_type=bed_type, detail=detail).encode("utf-8"),
+    )
     return directory
 
 
@@ -167,16 +202,42 @@ def _write_bytes(path: Path, data: bytes) -> None:
         handle.write(data)
 
 
-def _handoff_text(material_notes: dict[str, Any] | None) -> str:
+def _is_real_file(path: Path) -> bool:
+    return path.is_file() and not path.is_symlink()
+
+
+def _handoff_text(
+    material_notes: dict[str, Any] | None,
+    *,
+    material: str,
+    bed_type: str,
+    detail: str,
+) -> str:
     material_line = (
         "Type the temperatures in x1c-profile-notes.json. Confirm them against the filament datasheet."
         if material_notes
         else f"No material was set, so there are no profile notes yet. Pass material as {material_list()}."
     )
+    why = detail.strip() or "The headless slicer was not ready."
     return (
         "Bambu Studio handoff\n"
         "This file is geometry only. The X1 Carbon prints a sliced .gcode.3mf.\n"
+        f"Target: {TARGET_PRINTER}, {TARGET_NOZZLE_MM:.1f} mm nozzle, "
+        f"material {material or 'PLA'}, bed {bed_type}.\n"
         "\n"
+        f"{why}\n"
+        "\n"
+        "Normal path when the CLI is installed: fab_slice, or fab_bambu_push_3mf, "
+        "writes model.gcode.3mf without opening Bambu Studio.\n"
+        "Install OrcaSlicer or Bambu Studio so orca-slicer or bambu-studio is on PATH "
+        "(or set ORCA_SLICER_BIN / BAMBU_STUDIO_BIN). The CLI does not expand inherits. "
+        "Run techhand-print-fab --expand-presets --profile-root <resources/profiles> "
+        "--out <FAB_SLICER_PRESETS> to write full machine.json, process.json, and "
+        "filament/PLA.json from the installed slicer. That command sets curr_bed_type to "
+        "Textured PEI Plate. This server does not ship Bambu or Orca vendor profiles "
+        "and does not call the Bambu cloud.\n"
+        "\n"
+        "Until that CLI is ready:\n"
         "1. Open the mesh in Bambu Studio or OrcaSlicer.\n"
         "2. Select the Bambu Lab X1 Carbon and a 0.4 mm nozzle.\n"
         f"3. {material_line}\n"

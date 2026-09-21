@@ -4,7 +4,7 @@
   "width_mm": 30,
   "height_mm": 25,
   "thickness_mm": 3,
-  "material": "PETG",
+  "material": "PLA",
   "clearance_mm": 0.3,
   "holes": [
     {"diameter_mm": 3.4, "x_mm": 12, "y_mm": 10, "face": "base"},

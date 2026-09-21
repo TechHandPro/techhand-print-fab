@@ -9,7 +9,11 @@
         "BAMBU_PRINT_ENABLED": "0",
         "BAMBU_FARM_URL": "",
         "BAMBU_FARM_TOKEN": "",
-        "FAB_EXPORT_ROOTS": ""
+        "FAB_EXPORT_ROOTS": "",
+        "ORCA_SLICER_BIN": "",
+        "BAMBU_STUDIO_BIN": "",
+        "FAB_SLICER_PRESETS": "",
+        "FAB_SLICER_PROFILE_ROOT": ""
       }
     }
   }
