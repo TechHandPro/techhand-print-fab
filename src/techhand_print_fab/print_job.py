@@ -253,6 +253,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
     slicer_name = ""
     preset_files: tuple[dict[str, str], ...] | None = None
     sliced_plate = ""
+    plate_id = ""
     if not info.sliced:
         attempt = attempt_slice(
             source,
@@ -262,6 +263,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         )
         preset_files = attempt.preset_files
         sliced_plate = attempt.sliced_plate
+        plate_id = attempt.plate_id
         if attempt.output is None:
             return _fallback_result(opened, attempt, plate=plate)
         source = attempt.output
@@ -281,6 +283,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         mesh_warning=opened.mesh_warning,
         preset_files=preset_files,
         sliced_plate=sliced_plate,
+        plate_id=plate_id,
     )
 
     if plate not in info.plates:
@@ -590,6 +593,7 @@ def _slice_model(
             mesh_warning=opened.mesh_warning,
             preset_files=attempt.preset_files,
             sliced_plate=attempt.sliced_plate,
+            plate_id=attempt.plate_id,
         ),
     )
 
@@ -676,6 +680,7 @@ def _fallback_result(opened: _Opened, attempt: SliceAttempt, *, plate: int) -> d
             mesh_warning=opened.mesh_warning,
             preset_files=attempt.preset_files,
             sliced_plate=attempt.sliced_plate,
+            plate_id=attempt.plate_id,
         ),
     )
 
@@ -692,6 +697,7 @@ def _common(
     mesh_warning: str,
     preset_files: tuple[dict[str, str], ...] | None = None,
     sliced_plate: str = "",
+    plate_id: str = "",
 ) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "profile_notes": notes,
@@ -710,6 +716,8 @@ def _common(
         fields["preset_files"] = [dict(item) for item in preset_files]
     if sliced_plate:
         fields["sliced_plate"] = sliced_plate
+    if plate_id:
+        fields["plate_id"] = plate_id
     return fields
 
 

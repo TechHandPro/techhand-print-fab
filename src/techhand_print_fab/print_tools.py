@@ -138,8 +138,10 @@ def fab_slice(
     and the filament from the installed slicer's resources/profiles
     (or FAB_SLICER_PROFILE_ROOT). The CLI does not expand inherits.
     Stock X1 Carbon profiles often keep Cool Plate. This tool writes
-    curr_bed_type Textured PEI Plate into process.json and into the sliced 3MF
-    metadata unless another bed is named. sliced_plate reports that plate name.
+    curr_bed_type Textured PEI Plate into process.json and into the sliced 3MF.
+    The standing textured bed also locks plate_id textured_pei. A sliced file
+    that still tags cool_plate is rejected. sliced_plate is the Orca plate name.
+    bed_type stays textured_plate unless another bed is named.
     This tool does not ship a Bambu or Orca vendor profile and does not call the
     Bambu cloud. printer_dispatched stays false. If the profile tree cannot be
     found, preset_files names each file as missing or inherits, and the result
@@ -234,8 +236,10 @@ def fab_bambu_push_3mf(
     An unsliced STL or 3MF is sliced with OrcaSlicer or Bambu Studio's CLI when
     that program is available. Full presets are loaded from FAB_SLICER_PRESETS or
     flattened from the installed slicer profile tree. The CLI does not expand
-    inherits. Stock profiles often keep Cool Plate; the sliced file's plate
-    metadata is set to Textured PEI Plate unless another bed is named.
+    inherits. Stock profiles often keep Cool Plate. The standing textured bed
+    locks plate_id textured_pei and curr_bed_type Textured PEI Plate. A sliced
+    file that still tags cool_plate is rejected. bed_type stays textured_plate
+    unless another bed is named.
     This server does not ship a Bambu or Orca vendor profile and does not call
     the Bambu cloud. Studio handoff is the fallback when the CLI or the profile
     tree is missing. A sliced file that is newer than the mesh is uploaded as-is.

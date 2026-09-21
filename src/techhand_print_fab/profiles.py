@@ -8,6 +8,11 @@ DEFAULT_MATERIAL = "PLA"
 DEFAULT_BED_TYPE = "textured_plate"
 TARGET_PRINTER = "Bambu Lab X1 Carbon"
 TARGET_NOZZLE_MM = 0.4
+# Jeremiah's X1 Carbon plate is Textured PEI. Orca's enum string is
+# "Textured PEI Plate". The sliced-file lock token is textured_pei.
+# cool_plate is a different plate and must not be the dogfood tag.
+TEXTURED_PEI_PLATE_ID = "textured_pei"
+ORCA_TEXTURED_PEI = "Textured PEI Plate"
 
 MATERIALS: dict[str, dict[str, Any]] = {
     "PLA": {

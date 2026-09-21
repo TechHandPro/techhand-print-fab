@@ -35,8 +35,10 @@ from techhand_print_fab.print_files import MAX_MESH_BYTES, plate_numbers
 from techhand_print_fab.profiles import (
     DEFAULT_BED_TYPE,
     DEFAULT_MATERIAL,
+    ORCA_TEXTURED_PEI,
     TARGET_NOZZLE_MM,
     TARGET_PRINTER,
+    TEXTURED_PEI_PLATE_ID,
 )
 
 SLICE_TIMEOUT_S = 360
@@ -52,7 +54,7 @@ _HIDDEN_ENV = frozenset(
 )
 _ORCA_BEDS = {
     "hot_plate": "High Temp Plate",
-    "textured_plate": "Textured PEI Plate",
+    "textured_plate": ORCA_TEXTURED_PEI,
     "cool_plate": "Cool Plate",
     "engineering_plate": "Engineering Plate",
 }
@@ -77,6 +79,7 @@ class SliceAttempt:
     missing: tuple[str, ...]
     preset_files: tuple[dict[str, str], ...] = ()
     sliced_plate: str = ""
+    plate_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -347,9 +350,12 @@ def _invoke(
         _unlink(partial)
         return _failed(label, f"{label} did not write Metadata/plate_N.gcode.", reports)
     plate_name = orca_bed_name(bed_type) or ""
+    plate_id = TEXTURED_PEI_PLATE_ID if bed_type == DEFAULT_BED_TYPE else ""
     if plate_name:
         try:
-            apply_bed_metadata(partial, plate_name)
+            apply_bed_metadata(partial, plate_name, plate_id=plate_id)
+            if plate_id:
+                _reject_cool_plate_tag(partial)
         except BambuError as exc:
             _unlink(partial)
             return _failed(label, str(exc), reports)
@@ -369,7 +375,11 @@ def _invoke(
     except OSError as exc:
         _unlink(partial)
         raise BambuError("Could not move the sliced file into place.") from exc
-    plate_note = f" Plate metadata is {plate_name}." if plate_name else ""
+    plate_note = ""
+    if plate_name:
+        plate_note = f" Plate metadata is {plate_name}."
+        if plate_id:
+            plate_note = f" Plate metadata is {plate_name} ({plate_id})."
     return SliceAttempt(
         ok=True,
         mode="sliced",
@@ -383,6 +393,7 @@ def _invoke(
         missing=(),
         preset_files=_report_rows(reports),
         sliced_plate=plate_name,
+        plate_id=plate_id,
     )
 
 
@@ -457,20 +468,36 @@ _PLATE_LABELS = frozenset(
         "Supertack Plate",
     }
 )
-_PLATE_TOKENS = frozenset({"hot_plate", "textured_plate", "cool_plate", "engineering_plate"})
+_PLATE_TOKENS = frozenset(
+    {
+        "hot_plate",
+        "textured_plate",
+        "cool_plate",
+        "engineering_plate",
+        "eng_plate",
+        "textured_cool_plate",
+        "supertack_plate",
+    }
+)
+_COOL_TAGS = frozenset({"Cool Plate", "cool_plate", "btPC"})
 _CURR_BED_JSON = re.compile(r'("curr_bed_type"\s*:\s*")([^"]*)(")')
 _BED_JSON = re.compile(r'("bed_type"\s*:\s*")([^"]*)(")')
 _CURR_BED_XML = re.compile(r'(key="curr_bed_type"\s+value=")([^"]*)(")')
 _BED_XML = re.compile(r'(key="bed_type"\s+value=")([^"]*)(")')
-_GCODE_BED = re.compile(r'^(\s*;\s*(?:curr_bed_type|bed_type)\s*=\s*)(.*?)(\s*)$', re.MULTILINE)
+_GCODE_BED = re.compile(r'^(\s*;\s*(?:curr_bed_type|bed_type|plate_id)\s*=\s*)(.*?)(\s*)$', re.MULTILINE)
+_SELECTED_VALUE = re.compile(
+    r'(?:"(?:curr_bed_type|bed_type|plate_id)"\s*:\s*"|key="(?:curr_bed_type|bed_type|plate_id)"\s+value="|;\s*(?:curr_bed_type|bed_type|plate_id)\s*=\s*)([^"\n]+)'
+)
 
 
-def apply_bed_metadata(path: Path, bed_label: str) -> None:
+def apply_bed_metadata(path: Path, bed_label: str, *, plate_id: str = "") -> None:
     """Rewrite the selected plate inside a sliced 3MF.
 
-    Orca can leave ``Cool Plate`` in ``slice_info.config``, ``project_settings.config``,
-    and the gcode header after ``--curr-bed-type``. The printer compares that
-    metadata with the physical plate.
+    Orca can leave Cool Plate or ``cool_plate`` in ``slice_info.config``,
+    ``project_settings.config``, and the gcode header after ``--curr-bed-type``.
+    The X1 Carbon dogfood plate is Textured PEI. ``plate_id`` ``textured_pei``
+    is written for that default. Display names stay on Orca's enum, so
+    ``curr_bed_type`` is ``Textured PEI Plate`` when the file used a display name.
     """
     if path.is_symlink():
         raise BambuError("Refusing to rewrite sliced metadata through a symlink.")
@@ -483,51 +510,112 @@ def apply_bed_metadata(path: Path, bed_label: str) -> None:
         with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(temporary, "w") as target:
             for info in source.infolist():
                 data = source.read(info.filename)
-                target.writestr(info, _patch_member(info.filename, data, bed_label))
+                target.writestr(info, _patch_member(info.filename, data, bed_label, plate_id))
         os.replace(temporary, path)
     except (OSError, zipfile.BadZipFile) as exc:
         _unlink(temporary)
         raise BambuError("Could not set the plate in the sliced file.") from exc
 
 
-def _patch_member(name: str, data: bytes, bed_label: str) -> bytes:
+def _patch_member(name: str, data: bytes, bed_label: str, plate_id: str) -> bytes:
     lower = name.lower()
     if not lower.startswith("metadata/"):
         return data
     if lower.endswith(".gcode"):
-        return _patch_gcode(data, bed_label)
+        return _patch_gcode(data, bed_label, plate_id)
     if lower.endswith((".json", ".config", ".xml")):
-        return _patch_config(data, bed_label)
+        return _patch_config(data, bed_label, plate_id)
     return data
 
 
-def _patch_gcode(data: bytes, bed_label: str) -> bytes:
+def _locked_plate_value(current: str, bed_label: str, plate_id: str) -> str:
+    """Display names stay on Orca's enum. Snake tags use the plate id."""
+    text = current.strip()
+    if plate_id and text in _PLATE_TOKENS | {"btPC"}:
+        return plate_id
+    return bed_label
+
+
+def _patch_gcode(data: bytes, bed_label: str, plate_id: str) -> bytes:
     text = data.decode("utf-8", errors="replace")
 
     def replace(match: re.Match[str]) -> str:
         prefix = match.group(1)
         value = match.group(2).strip()
-        if "curr_bed_type" in prefix.lower() or value in _PLATE_LABELS or value in _PLATE_TOKENS:
-            return f"{prefix}{bed_label}{match.group(3)}"
+        lower_prefix = prefix.lower()
+        if "plate_id" in lower_prefix:
+            if plate_id:
+                return f"{prefix}{plate_id}{match.group(3)}"
+            return match.group(0)
+        if "curr_bed_type" in lower_prefix or value in _PLATE_LABELS or value in _PLATE_TOKENS or value in _COOL_TAGS:
+            chosen = _locked_plate_value(value, bed_label, plate_id)
+            return f"{prefix}{chosen}{match.group(3)}"
         return match.group(0)
 
-    return _GCODE_BED.sub(replace, text).encode("utf-8")
-
-
-def _patch_config(data: bytes, bed_label: str) -> bytes:
-    text = data.decode("utf-8", errors="replace")
-    text = _CURR_BED_JSON.sub(lambda match: f"{match.group(1)}{bed_label}{match.group(3)}", text)
-    text = _CURR_BED_XML.sub(lambda match: f"{match.group(1)}{bed_label}{match.group(3)}", text)
-    text = _BED_JSON.sub(lambda match: _replace_known_plate(match, bed_label), text)
-    text = _BED_XML.sub(lambda match: _replace_known_plate(match, bed_label), text)
+    text = _GCODE_BED.sub(replace, text)
+    if plate_id and f"plate_id = {plate_id}" not in text:
+        text = re.sub(
+            r"(?m)^(\s*;\s*curr_bed_type\s*=.*)$",
+            lambda match: f"{match.group(1)}\n; plate_id = {plate_id}",
+            text,
+            count=1,
+        )
+        if f"plate_id = {plate_id}" not in text:
+            text = f"; plate_id = {plate_id}\n{text}"
     return text.encode("utf-8")
 
 
-def _replace_known_plate(match: re.Match[str], bed_label: str) -> str:
+def _patch_config(data: bytes, bed_label: str, plate_id: str) -> bytes:
+    text = data.decode("utf-8", errors="replace")
+    text = _CURR_BED_JSON.sub(lambda match: _swap_plate(match, bed_label, plate_id), text)
+    text = _CURR_BED_XML.sub(lambda match: _swap_plate(match, bed_label, plate_id), text)
+    text = _BED_JSON.sub(lambda match: _replace_known_plate(match, bed_label, plate_id), text)
+    text = _BED_XML.sub(lambda match: _replace_known_plate(match, bed_label, plate_id), text)
+    if plate_id and 'key="plate_id"' not in text and "</plate>" in text:
+        text = text.replace(
+            "</plate>",
+            f'<metadata key="plate_id" value="{plate_id}"/></plate>',
+            1,
+        )
+    if plate_id and '"plate_id"' not in text and '"curr_bed_type"' in text:
+        text = _CURR_BED_JSON.sub(
+            lambda match: f'{match.group(0)}, "plate_id": "{plate_id}"',
+            text,
+            count=1,
+        )
+    return text.encode("utf-8")
+
+
+def _swap_plate(match: re.Match[str], bed_label: str, plate_id: str) -> str:
+    chosen = _locked_plate_value(match.group(2), bed_label, plate_id)
+    return f"{match.group(1)}{chosen}{match.group(3)}"
+
+
+def _replace_known_plate(match: re.Match[str], bed_label: str, plate_id: str) -> str:
     value = match.group(2)
-    if value in _PLATE_LABELS or value in _PLATE_TOKENS:
-        return f"{match.group(1)}{bed_label}{match.group(3)}"
+    if value in _PLATE_LABELS or value in _PLATE_TOKENS or value in _COOL_TAGS:
+        return _swap_plate(match, bed_label, plate_id)
     return match.group(0)
+
+
+def _reject_cool_plate_tag(path: Path) -> None:
+    """X1C dogfood refuses a sliced file whose selected plate is still cool_plate."""
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            chunks = [
+                archive.read(info.filename).decode("utf-8", errors="replace")
+                for info in archive.infolist()
+                if info.filename.lower().startswith("metadata/")
+                and info.filename.lower().endswith((".gcode", ".json", ".config", ".xml"))
+            ]
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise BambuError("Could not check the plate tag in the sliced file.") from exc
+    for value in _SELECTED_VALUE.findall("\n".join(chunks)):
+        if value.strip() in _COOL_TAGS:
+            raise BambuError(
+                "Sliced file still tags the plate as cool_plate. "
+                f"X1C dogfood locks {TEXTURED_PEI_PLATE_ID} ({ORCA_TEXTURED_PEI})."
+            )
 
 
 def _reject_separator(path: Path) -> None:

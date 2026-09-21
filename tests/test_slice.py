@@ -224,6 +224,7 @@ def test_fab_slice_writes_gcode_without_printing(server, monkeypatch: pytest.Mon
     assert result["slicer"] == "OrcaSlicer"
     assert result["nozzle_mm"] == 0.4
     assert result["sliced_plate"] == "Textured PEI Plate"
+    assert result["plate_id"] == "textured_pei"
     process = json.loads((tmp_path / "presets" / "process.json").read_text(encoding="utf-8"))
     assert process["curr_bed_type"] == "Textured PEI Plate"
     gcode = get_store().part_dir(project_id, "plate") / "model.gcode.3mf"
@@ -325,6 +326,7 @@ def test_explicit_bed_reaches_the_cli(server, monkeypatch: pytest.MonkeyPatch, t
     assert result["bed_type"] == "cool_plate"
     assert result["mode"] == "sliced"
     assert result["sliced_plate"] == "Cool Plate"
+    assert "plate_id" not in result
     process = json.loads((tmp_path / "presets" / "process.json").read_text(encoding="utf-8"))
     assert process["curr_bed_type"] == "Cool Plate"
     argv = calls[0]["argv"]
@@ -501,6 +503,7 @@ def test_fab_slice_expands_installed_profiles(server, monkeypatch: pytest.Monkey
     assert result["profile_applied"] is True
     assert result["printer_dispatched"] is False
     assert result["sliced_plate"] == "Textured PEI Plate"
+    assert result["plate_id"] == "textured_pei"
     assert result["material"] == "PLA"
     assert result["bed_type"] == "textured_plate"
     cache = Path(os.environ["FAB_DATA_DIR"]) / "slicer-presets" / "x1c-0.4-pla-textured"
@@ -553,6 +556,8 @@ def test_cool_plate_metadata_is_rewritten_to_textured(
     result = tool_payload(server, "fab_slice", {"project_id": project_id, "part_name": "plate"})
     assert result["mode"] == "sliced"
     assert result["sliced_plate"] == "Textured PEI Plate"
+    assert result["plate_id"] == "textured_pei"
+    assert result["bed_type"] == "textured_plate"
     assert result["printer_dispatched"] is False
     written = json.loads(process_path.read_text(encoding="utf-8"))
     assert written["curr_bed_type"] == "Textured PEI Plate"
@@ -561,11 +566,14 @@ def test_cool_plate_metadata_is_rewritten_to_textured(
         header = archive.read("Metadata/plate_1.gcode").decode()
         xml = archive.read("Metadata/slice_info.config").decode()
         settings = json.loads(archive.read("Metadata/project_settings.config"))
-    assert "Textured PEI Plate" in header
+    assert header.startswith("; curr_bed_type = Textured PEI Plate\n")
+    assert "plate_id = textured_pei" in header
     assert "Cool Plate" not in header
     assert 'value="Textured PEI Plate"' in xml
+    assert 'key="plate_id" value="textured_pei"' in xml
     assert "Cool Plate" not in xml
     assert settings["curr_bed_type"] == "Textured PEI Plate"
+    assert settings["plate_id"] == "textured_pei"
     assert settings["cool_plate_temp"] == ["35"]
     assert settings["textured_plate_temp"] == ["55"]
 
@@ -602,9 +610,30 @@ def test_auto_bed_does_not_rewrite_cool_plate(tmp_path: Path, monkeypatch: pytes
 def test_apply_bed_metadata_leaves_other_plate_keys(tmp_path: Path) -> None:
     path = tmp_path / "model.gcode.3mf"
     _cool_plate_archive(path)
-    apply_bed_metadata(path, "Textured PEI Plate")
+    apply_bed_metadata(path, "Textured PEI Plate", plate_id="textured_pei")
     with zipfile.ZipFile(path) as archive:
         settings = json.loads(archive.read("Metadata/project_settings.config"))
-        assert archive.read("Metadata/plate_1.gcode").startswith(b"; curr_bed_type = Textured PEI Plate\n")
+        gcode = archive.read("Metadata/plate_1.gcode")
+        assert gcode.startswith(b"; curr_bed_type = Textured PEI Plate\n")
+        assert b"plate_id = textured_pei" in gcode
     assert settings["curr_bed_type"] == "Textured PEI Plate"
+    assert settings["plate_id"] == "textured_pei"
+    assert settings["cool_plate_temp"] == ["35"]
+
+
+def test_snake_cool_plate_tag_locks_to_textured_pei(tmp_path: Path) -> None:
+    path = tmp_path / "model.gcode.3mf"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Metadata/plate_1.gcode", b"; curr_bed_type = cool_plate\nG28\n")
+        archive.writestr(
+            "Metadata/project_settings.config",
+            json.dumps({"curr_bed_type": "cool_plate", "cool_plate_temp": ["35"]}),
+        )
+    apply_bed_metadata(path, "Textured PEI Plate", plate_id="textured_pei")
+    with zipfile.ZipFile(path) as archive:
+        gcode = archive.read("Metadata/plate_1.gcode").decode()
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+    assert "cool_plate" not in gcode
+    assert "plate_id = textured_pei" in gcode
+    assert settings["curr_bed_type"] == "textured_pei"
     assert settings["cool_plate_temp"] == ["35"]

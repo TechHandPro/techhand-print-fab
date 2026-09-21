@@ -17,7 +17,7 @@ Refuse requests to make a 1:1 copy of a proprietary commercial product.
 Refuse firearm and other weapon-part print requests. Training-tool and general fab jobs are in scope.
 Design exports are files on disk. Mesh export is dry-fire training output.
 Standing defaults are {DEFAULT_MATERIAL}, bed {DEFAULT_BED_TYPE}, {TARGET_PRINTER}, {TARGET_NOZZLE_MM:.1f} mm nozzle, unless the part or the call sets another material or bed.
-fab_slice writes a .gcode.3mf when OrcaSlicer or Bambu Studio's CLI is available. It flattens that slicer's Bambu X1 Carbon 0.4 mm presets when they still use inherits, and it sets curr_bed_type to Textured PEI Plate unless another bed is named. Stock profiles often keep Cool Plate. It does not ship vendor profiles and does not call the Bambu cloud.
+fab_slice writes a .gcode.3mf when OrcaSlicer or Bambu Studio's CLI is available. It flattens that slicer's Bambu X1 Carbon 0.4 mm presets when they still use inherits. The standing textured bed locks plate_id textured_pei and curr_bed_type Textured PEI Plate. Stock profiles often keep Cool Plate, and a sliced file that still tags cool_plate is rejected. It does not ship vendor profiles and does not call the Bambu cloud.
 fab_bambu_discover lists host, model, state, and AMS when the printer exposes it.
 fab_bambu_status reads nozzle, bed, and job progress and does not queue a job.
 fab_bambu_push_3mf slices an unsliced STL or 3MF on that path, then defaults to dry-run. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.
