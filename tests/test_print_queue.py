@@ -338,6 +338,21 @@ def test_status_reads_temperatures_without_queueing(server, monkeypatch: pytest.
     assert ACCESS not in json.dumps(result)
 
 
+def test_unreachable_status_is_a_print_error(server, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("techhand_print_fab.bambu_mqtt.open_tls_stream", boom)
+    _enable(monkeypatch)
+    result = tool_payload(server, "fab_bambu_status", {})
+    assert result["ok"] is False
+    assert result["mode"] == "print_error"
+    assert result["printer_dispatched"] is False
+    assert result["dry_fire"] is True
+    assert "unreachable" in result["message"]
+    assert ACCESS not in json.dumps(result)
+
+
 def test_status_error_scrubs_the_access_code(server, monkeypatch: pytest.MonkeyPatch) -> None:
     def fake(_config: object, _host: str, _serial: str) -> dict[str, object]:
         raise BambuError(f"rejected {ACCESS}")

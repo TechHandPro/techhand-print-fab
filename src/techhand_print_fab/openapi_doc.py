@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Any
 
 from mcp import Client
@@ -33,7 +34,7 @@ def build_openapi(server: MCPServer) -> dict[str, Any]:
             "post": {
                 "operationId": tool.name,
                 "summary": tool.name,
-                "description": tool.description or "",
+                "description": inspect.cleandoc(tool.description or ""),
                 "requestBody": {
                     "required": True,
                     "content": {"application/json": {"schema": tool.input_schema}},

@@ -6,6 +6,8 @@ import socket
 import struct
 import threading
 
+import pytest
+
 from techhand_print_fab.bambu_frames import (
     build_project_file,
     build_pushall,
@@ -17,6 +19,7 @@ from techhand_print_fab.bambu_frames import (
     status_snapshot,
     summarize_ams,
 )
+from techhand_print_fab.bambu_config import BambuError
 from techhand_print_fab.bambu_mqtt import (
     MqttSession,
     SocketStream,
@@ -25,6 +28,7 @@ from techhand_print_fab.bambu_mqtt import (
     encode_publish,
     encode_remaining_length,
     encode_subscribe,
+    mqtt_status,
     parse_connect,
     parse_publish,
     read_packet,
@@ -280,3 +284,22 @@ def test_pushall_snapshot_keeps_ams_and_ignores_a_job_ack() -> None:
     assert body["gcode_state"] == "IDLE"
     assert body["nozzle_temper"] == 25
     assert "result" not in body
+
+
+@pytest.mark.parametrize("exc", [TimeoutError("timed out"), ConnectionRefusedError(111, "Connection refused")])
+def test_mqtt_status_turns_socket_errors_into_bambu_error(monkeypatch: pytest.MonkeyPatch, exc: OSError) -> None:
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise exc
+
+    monkeypatch.setattr("techhand_print_fab.bambu_mqtt.open_tls_stream", boom)
+    with pytest.raises(BambuError, match="Printer status unreachable"):
+        mqtt_status(
+            "127.0.0.1",
+            8883,
+            "bblp",
+            ACCESS,
+            "00M09A123456789",
+            build_pushall("1"),
+            1,
+            allow_nonprivate=False,
+        )

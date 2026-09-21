@@ -179,7 +179,7 @@ Bambu documents Developer Mode as the third-party control channel: MQTT on port 
 
 Farm Manager is optional. Its local REST API listens on port 8888. Use it when `BAMBU_TRANSPORT=farm`, or when `BAMBU_FARM_URL` is set and no LAN host is configured. A printer bound to Farm Manager closes its own MQTT port, so LAN and farm are two attachments. The cloud API is unused.
 
-`fab_bambu_discover` reports `path: lan_developer_mode` and a `why` string with this choice. With `BAMBU_LAN_HOST` set it sends the printer's TCP 3000 detect frame. SSDP (UDP 2021 and 1990) runs only when you pass `ssdp: true` or set `BAMBU_DISCOVER_SSDP=1`. When `BAMBU_ACCESS_CODE` matches that serial, a read-only MQTT `pushall` fills `state` and `ams`.
+`fab_bambu_discover` reports `path: lan_developer_mode` and a `why` string with this choice. With `BAMBU_LAN_HOST` set it sends the printer's TCP 3000 detect frame. That probe does not use `BAMBU_ACCESS_CODE`, `BAMBU_SERIAL`, a farm token, or `BAMBU_PRINT_ENABLED`. No other `BAMBU_*` variable is required for the detect path. SSDP (UDP 2021 and 1990) runs only when you pass `ssdp: true` or set `BAMBU_DISCOVER_SSDP=1`, and that scan also needs no secrets. When `BAMBU_ACCESS_CODE` matches that serial, a read-only MQTT `pushall` fills `state` and `ams`.
 
 ### Printer setup
 
@@ -223,15 +223,15 @@ PRINT runs this list and reports PASS or FAIL for each step to PRODUCT and CREW.
 
 Safe steps (no live push):
 
-1. Inject `BAMBU_LAN_HOST`, `BAMBU_ACCESS_CODE`, and `BAMBU_SERIAL`. Leave `BAMBU_PRINT_ENABLED` unset. **PASS:** the process starts and the values are not in the chat transcript. **FAIL:** a secret was pasted into chat or committed.
-2. `fab_bambu_discover`. **PASS:** `printer_dispatched` is false, and a printer row has `host`, `model`, and `state` (empty only when the status read failed and `status_error` says why). `ams` is an object when the printer exposed AMS, otherwise null. `reachable: true` means the TCP 3000 detect probe answered. **FAIL:** the call errors, or `printer_dispatched` is true.
-3. `fab_bambu_status`. **PASS:** `mode` is `status`, `printer_dispatched` is false, and the result has `nozzle_c`, `bed_c`, `state`, and `progress_percent` (null when the report omitted that field). **FAIL:** any of those keys are missing, or `printer_dispatched` is true.
+1. Set `BAMBU_LAN_HOST` to the printer's private IP. Leave `BAMBU_ACCESS_CODE`, `BAMBU_SERIAL`, farm secrets, and `BAMBU_PRINT_ENABLED` unset for the discover probe. **PASS:** the process starts and no secret is in the chat transcript. **FAIL:** a secret was pasted into chat or committed.
+2. `fab_bambu_discover`. The TCP 3000 probe needs no `BAMBU_*` variable besides `BAMBU_LAN_HOST`, and that host is not a secret. **PASS:** `printer_dispatched` is false, and a printer row has `host`, `model`, and `reachable: true`. `state` may be empty and `ams` null until the access code and serial are injected. **FAIL:** the call errors, or `printer_dispatched` is true.
+3. Inject `BAMBU_ACCESS_CODE` and `BAMBU_SERIAL` from orange-secret or the vault. Do not paste them. Leave `BAMBU_PRINT_ENABLED` unset. `fab_bambu_status`. **PASS:** `mode` is `status`, `printer_dispatched` is false, and the result has `nozzle_c`, `bed_c`, `state`, and `progress_percent` (null when the report omitted that field). An unreachable host is `mode` `print_error` with `printer_dispatched` false, which is a FAIL for a printer that should be on the LAN, not an uncaught exception. **FAIL:** any of those keys are missing, `printer_dispatched` is true, or the call raises.
 4. `fab_create_project` with `name` `Test plate`.
 5. `fab_param_model` with `part_name` `plate` and `params` `{"kind":"plate","length_mm":20,"width_mm":20,"thickness_mm":3,"material":"PETG"}`.
 6. `fab_export_stl` on `plate`.
 7. `fab_bambu_push_3mf` with that `project_id` and `part_name` (default `dry_run` true). **PASS:** `mode` is `studio_handoff`, `printer_dispatched` is false, and `studio-handoff/x1c-profile-notes.json` is next to the part. **FAIL:** `printer_dispatched` is true.
 8. Open the STL in Bambu Studio. Pick X1 Carbon, a 0.4 mm nozzle, and PETG. Check the notes against the spool datasheet. Slice. Export `plate.gcode.3mf` into the part directory or a folder listed in `FAB_EXPORT_ROOTS`.
-9. `fab_bambu_push_3mf` with `file_path` of that sliced file, `material` `PETG`, and `dry_run` true. **PASS:** `mode` is `dry_run`, `printer_dispatched` is false, and the `request` preview contains `project_file` with an empty `md5`. The access code is not in the result. **FAIL:** a file was uploaded or `printer_dispatched` is true.
+9. `fab_bambu_push_3mf` with `file_path` of that sliced file, `material` `PETG`, and `dry_run` true. **PASS:** `mode` is `dry_run`, `printer_dispatched` is false, `request.print.command` is `project_file`, and `request.print.md5` is empty. The access code is not in the result. **FAIL:** a file was uploaded or `printer_dispatched` is true.
 
 Live push (Jeremiah at the printer):
 

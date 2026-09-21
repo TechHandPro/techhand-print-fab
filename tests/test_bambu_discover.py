@@ -136,6 +136,24 @@ def test_status_lookup_failure_keeps_the_printer() -> None:
     assert result["printer_dispatched"] is False
 
 
+def test_unreachable_status_during_discover_stays_listed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("techhand_print_fab.bambu_mqtt.open_tls_stream", boom)
+    result = discover_printers(
+        config=make_config(lan_host="192.168.1.50", serial="00M09A123456789", access_code="99887766"),
+        probe=lambda host: DetectInfo(True, "00M09A123456789", "BL-P001", "X1C", "detect"),
+    )
+    printer = result["printers"][0]
+    assert result["ok"] is True
+    assert result["printer_dispatched"] is False
+    assert printer["host"] == "192.168.1.50"
+    assert printer["state"] == ""
+    assert printer["ams"] is None
+    assert "unreachable" in printer["status_error"]
+
+
 def test_public_lan_host_is_rejected_before_a_probe() -> None:
     def explode(_host: str) -> DetectInfo:
         raise AssertionError("probe")

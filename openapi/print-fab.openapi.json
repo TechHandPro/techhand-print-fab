@@ -44,7 +44,7 @@
   "paths": {
     "/tools/fab_bambu_discover": {
       "post": {
-        "description": "List Bambu printers on the LAN or on a configured Farm Manager server.\n\n    Each printer includes host, model, state, and ams. ams is null when the printer\n    did not expose an AMS object. Does not upload a file and does not start a print.\n    printer_dispatched stays false. A configured BAMBU_LAN_HOST is probed with the\n    TCP 3000 detect frame. When BAMBU_ACCESS_CODE and the serial are set, a read-only\n    MQTT pushall fills state and AMS. LAN Developer Mode is the print path. Farm\n    Manager is optional. The cloud API is not used.\n    ",
+        "description": "List Bambu printers on the LAN or on a configured Farm Manager server.\n\nEach printer includes host, model, state, and ams. ams is null when the printer\ndid not expose an AMS object. Does not upload a file and does not start a print.\nprinter_dispatched stays false. A configured BAMBU_LAN_HOST is probed with the\nTCP 3000 detect frame. That probe does not need an access code, serial, farm\ntoken, or BAMBU_PRINT_ENABLED. When BAMBU_ACCESS_CODE and the serial are set, a\nread-only MQTT pushall fills state and AMS. LAN Developer Mode is the print path.\nFarm Manager is optional. The cloud API is not used.",
         "operationId": "fab_bambu_discover",
         "requestBody": {
           "content": {
@@ -88,7 +88,7 @@
     },
     "/tools/fab_bambu_push_3mf": {
       "post": {
-        "description": "Upload a sliced .gcode.3mf and queue it, or hand an unsliced STL/3MF to Bambu Studio.\n\n    printer_dispatched is true only after the printer or Farm Manager accepts the job.\n    An upload that is not accepted stays false. dry_run defaults to true and does not\n    upload or queue. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.\n    Raw .gcode is not a job. LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the\n    print path. Farm Manager is used when transport is farm, or when BAMBU_FARM_URL is set\n    and no LAN host is configured. Geometry-only STL and 3MF files are not sent. The tool\n    writes a Studio handoff and X1 Carbon profile notes. Firearm and other weapon-part\n    requests are refused. Training-tool and general fab jobs are in scope. Credentials\n    come from the process environment, not from the repo.\n    ",
+        "description": "Upload a sliced .gcode.3mf and queue it, or hand an unsliced STL/3MF to Bambu Studio.\n\nprinter_dispatched is true only after the printer or Farm Manager accepts the job.\nAn upload that is not accepted stays false. dry_run defaults to true and does not\nupload or queue. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.\nRaw .gcode is not a job. LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the\nprint path. Farm Manager is used when transport is farm, or when BAMBU_FARM_URL is set\nand no LAN host is configured. Geometry-only STL and 3MF files are not sent. The tool\nwrites a Studio handoff and X1 Carbon profile notes. Firearm and other weapon-part\nrequests are refused. Training-tool and general fab jobs are in scope. Credentials\ncome from the process environment, not from the repo.",
         "operationId": "fab_bambu_push_3mf",
         "requestBody": {
           "content": {
@@ -237,7 +237,7 @@
     },
     "/tools/fab_bambu_status": {
       "post": {
-        "description": "Read nozzle temperature, bed temperature, and job progress.\n\n    LAN uses a read-only MQTT pushall. Farm Manager reads the device report from\n    GET /devices. This tool does not upload a file and does not queue a job.\n    printer_dispatched stays false. Credentials come from the process environment.\n    ",
+        "description": "Read nozzle temperature, bed temperature, and job progress.\n\nLAN uses a read-only MQTT pushall. Farm Manager reads the device report from\nGET /devices. This tool does not upload a file and does not queue a job.\nprinter_dispatched stays false. Credentials come from the process environment.",
         "operationId": "fab_bambu_status",
         "requestBody": {
           "content": {
@@ -386,7 +386,7 @@
     },
     "/tools/fab_dfm_check": {
       "post": {
-        "description": "Heuristics for wall thickness, holes, overhang, clearance, and X1C bed size.\n\n    Notes are for a human reviewing an FDM print. Nothing is sliced or printed.\n    ",
+        "description": "Heuristics for wall thickness, holes, overhang, clearance, and X1C bed size.\n\nNotes are for a human reviewing an FDM print. Nothing is sliced or printed.",
         "operationId": "fab_dfm_check",
         "requestBody": {
           "content": {
@@ -576,7 +576,7 @@
     },
     "/tools/fab_param_model": {
       "post": {
-        "description": "Generate OpenSCAD and, by default, a CadQuery script from params JSON.\n\n    OpenSCAD is the primary backend. The CadQuery file is source to run later\n    with CadQuery installed; this server does not execute it. No mesh is sent\n    to a printer.\n    ",
+        "description": "Generate OpenSCAD and, by default, a CadQuery script from params JSON.\n\nOpenSCAD is the primary backend. The CadQuery file is source to run later\nwith CadQuery installed; this server does not execute it. No mesh is sent\nto a printer.",
         "operationId": "fab_param_model",
         "requestBody": {
           "content": {
@@ -653,7 +653,7 @@
     },
     "/tools/fab_x1c_profile_notes": {
       "post": {
-        "description": "Starting nozzle, bed, fan, and drying notes for a Bambu X1 Carbon class setup.\n\n    These are notes to type into Orca or Bambu Studio. This tool does not apply\n    a profile and does not start a print.\n    ",
+        "description": "Starting nozzle, bed, fan, and drying notes for a Bambu X1 Carbon class setup.\n\nThese are notes to type into Orca or Bambu Studio. This tool does not apply\na profile and does not start a print.",
         "operationId": "fab_x1c_profile_notes",
         "requestBody": {
           "content": {

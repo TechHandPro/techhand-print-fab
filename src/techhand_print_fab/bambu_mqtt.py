@@ -275,20 +275,26 @@ def mqtt_status(
 ) -> dict[str, Any]:
     """Publish pushall and return the first print report that carries state or nozzle temperature."""
     assert_private_host(host, allow_nonprivate=allow_nonprivate)
-    stream = open_tls_stream(host, port, timeout_s)
+    try:
+        stream = open_tls_stream(host, port, timeout_s)
+    except (TimeoutError, OSError) as exc:
+        raise BambuError(f"Printer status unreachable: {exc}") from None
     try:
         session = MqttSession(stream)
-        return session.collect(
-            client_id=_client_id(),
-            username=username,
-            password=password,
-            report_topic=f"device/{serial}/report",
-            request_topic=f"device/{serial}/request",
-            payload=payload,
-            timeout_s=timeout_s,
-            timeout_message=_STATUS_TIMEOUT,
-            accept=_is_status_report,
-        )
+        try:
+            return session.collect(
+                client_id=_client_id(),
+                username=username,
+                password=password,
+                report_topic=f"device/{serial}/report",
+                request_topic=f"device/{serial}/request",
+                payload=payload,
+                timeout_s=timeout_s,
+                timeout_message=_STATUS_TIMEOUT,
+                accept=_is_status_report,
+            )
+        except (TimeoutError, OSError) as exc:
+            raise BambuError(f"Printer status unreachable: {exc}") from None
     finally:
         stream.close()
 

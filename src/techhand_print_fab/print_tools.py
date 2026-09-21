@@ -53,9 +53,10 @@ def fab_bambu_discover(
     Each printer includes host, model, state, and ams. ams is null when the printer
     did not expose an AMS object. Does not upload a file and does not start a print.
     printer_dispatched stays false. A configured BAMBU_LAN_HOST is probed with the
-    TCP 3000 detect frame. When BAMBU_ACCESS_CODE and the serial are set, a read-only
-    MQTT pushall fills state and AMS. LAN Developer Mode is the print path. Farm
-    Manager is optional. The cloud API is not used.
+    TCP 3000 detect frame. That probe does not need an access code, serial, farm
+    token, or BAMBU_PRINT_ENABLED. When BAMBU_ACCESS_CODE and the serial are set, a
+    read-only MQTT pushall fills state and AMS. LAN Developer Mode is the print path.
+    Farm Manager is optional. The cloud API is not used.
     """
     try:
         payload = discover_printers(ssdp=ssdp, transport=transport)
