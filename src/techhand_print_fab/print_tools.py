@@ -11,6 +11,7 @@ from pydantic import Field
 from techhand_print_fab.bambu_config import BambuError, load_config, scrub_obj, secret_values
 from techhand_print_fab.bambu_discover import discover_printers
 from techhand_print_fab.print_job import queue_print, read_printer_status
+from techhand_print_fab.profiles import material_list
 from techhand_print_fab.results import print_result
 
 _DISCOVER = ToolAnnotations(
@@ -99,7 +100,7 @@ def fab_bambu_push_3mf(
     ] = "",
     material: Annotated[
         str,
-        Field(description="PETG, ASA, TPU, PA, or PA-CF. Empty uses the part material. Notes are not a slicer profile."),
+        Field(description=f"{material_list()}. Empty uses the part material. Notes are not a slicer profile."),
     ] = "",
     intent: Annotated[str, Field(description="What this original training-tool or fab part is. Weapon-part requests are refused.")] = "",
     confirm: Annotated[

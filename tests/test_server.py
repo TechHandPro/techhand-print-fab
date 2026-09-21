@@ -212,8 +212,17 @@ def test_profile_notes_are_not_a_print_job(server) -> None:
     assert notes["sliced"] is False
     assert notes["printer_dispatched"] is False
     assert "245" in notes["starting_notes"]["nozzle_c"]
-    missing = tool_payload(server, "fab_x1c_profile_notes", {"material": "ABS"})
+    for material, needle in (("PLA", "220"), ("ABS", "260")):
+        notes = tool_payload(server, "fab_x1c_profile_notes", {"material": material})
+        assert notes["ok"] is True
+        assert notes["material"] == material
+        assert notes["profile_applied"] is False
+        assert notes["printer_dispatched"] is False
+        assert needle in notes["starting_notes"]["nozzle_c"]
+    missing = tool_payload(server, "fab_x1c_profile_notes", {"material": "wood"})
     assert missing["ok"] is False
+    assert "PLA" in missing["supported"]
+    assert "ABS" in missing["supported"]
     assert "PA-CF" in missing["supported"]
 
 

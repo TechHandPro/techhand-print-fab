@@ -12,7 +12,7 @@ from typing import Any
 from techhand_print_fab.bambu_config import BambuError
 from techhand_print_fab.bambu_frames import plate_pattern
 from techhand_print_fab.paths import export_roots, resolve_under
-from techhand_print_fab.profiles import profile_notes
+from techhand_print_fab.profiles import material_list, profile_notes
 
 MAX_MESH_BYTES = 200 * 1024 * 1024
 _MAX_ZIP_ENTRIES = 400
@@ -171,7 +171,7 @@ def _handoff_text(material_notes: dict[str, Any] | None) -> str:
     material_line = (
         "Type the temperatures in x1c-profile-notes.json. Confirm them against the filament datasheet."
         if material_notes
-        else "No material was set, so there are no profile notes yet. Pass material as PETG, ASA, TPU, PA, or PA-CF."
+        else f"No material was set, so there are no profile notes yet. Pass material as {material_list()}."
     )
     return (
         "Bambu Studio handoff\n"

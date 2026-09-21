@@ -96,7 +96,7 @@ Nothing in that setup calls TNT.
 | `fab_export_stl` | Binary STL on disk. |
 | `fab_export_3mf` | Geometry-only 3MF. Not a Bambu/Orca project and not a toolpath. |
 | `fab_dfm_check` | Wall, hole, overhang, clearance, and 256 mm bed heuristics. |
-| `fab_x1c_profile_notes` | Starting notes for PETG, ASA, TPU, PA, and PA-CF. |
+| `fab_x1c_profile_notes` | Starting notes for PLA, PETG, ABS, ASA, TPU, PA, and PA-CF. |
 | `fab_bom_sketch` | Filament mass and a fastener guess from hole diameters. |
 | `fab_bambu_discover` | List printers: host, model, state, and AMS when the printer exposes it. Does not print. |
 | `fab_bambu_status` | Nozzle temperature, bed temperature, and job progress. Does not queue a job. |
@@ -168,6 +168,8 @@ Step 5 needs OpenSCAD. These parts are not a built-in primitive. The server stil
 Prefer Push stays held. Ticket attach stays the optional `extras/tnt` package.
 
 ## Bambu X1 Carbon print push
+
+PLA, PETG, ABS, ASA, TPU, PA, and PA-CF are allowed. Notes are starting temperatures, not a slicer profile.
 
 The printer runs a sliced `.gcode.3mf`. `fab_export_stl` and `fab_export_3mf` write geometry only. `fab_bambu_push_3mf` on those files writes a Studio handoff and does not start the printer. Slice the mesh in Bambu Studio or OrcaSlicer with an X1 Carbon profile, then push the `.gcode.3mf`. Raw `.gcode` is not queued.
 

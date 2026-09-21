@@ -28,7 +28,7 @@ from techhand_print_fab.print_files import (
     resolve_mesh,
     write_handoff,
 )
-from techhand_print_fab.profiles import canonical_material
+from techhand_print_fab.profiles import canonical_material, material_list
 from techhand_print_fab.results import print_result
 from techhand_print_fab.store import StoreError, get_store, slugify
 
@@ -478,7 +478,7 @@ def _material(material: str, record: dict[str, Any] | None) -> str:
     if material.strip():
         chosen = canonical_material(material)
         if chosen is None:
-            raise BambuError("material must be PETG, ASA, TPU, PA, or PA-CF.")
+            raise BambuError(f"material must be {material_list()}.")
         return chosen
     spec = record.get("spec") if record is not None and isinstance(record.get("spec"), dict) else {}
     return canonical_material(str(spec.get("material") or "")) or ""

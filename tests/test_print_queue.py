@@ -276,6 +276,21 @@ def test_discover_tool_with_no_printer_configured(server) -> None:
     assert "Developer Mode" in result["why"]
 
 
+def test_pla_and_abs_are_allowed_and_do_not_dispatch(server) -> None:
+    project_id = _plate(server)
+    write_sliced(get_store().part_dir(project_id, "plate") / "model.gcode.3mf")
+    for material in ("PLA", "abs"):
+        result = tool_payload(
+            server,
+            "fab_bambu_push_3mf",
+            {"project_id": project_id, "part_name": "plate", "material": material, "dry_run": True},
+        )
+        assert result["ok"] is True
+        assert result["material"] == "ABS" if material == "abs" else material
+        assert result["printer_dispatched"] is False
+        assert result["profile_applied"] is False
+
+
 def test_bad_material_is_rejected(server) -> None:
     project_id = _plate(server)
     result = tool_payload(

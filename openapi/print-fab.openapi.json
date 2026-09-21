@@ -158,7 +158,7 @@
                   },
                   "material": {
                     "default": "",
-                    "description": "PETG, ASA, TPU, PA, or PA-CF. Empty uses the part material. Notes are not a slicer profile.",
+                    "description": "PLA, PETG, ABS, ASA, TPU, PA, or PA-CF. Empty uses the part material. Notes are not a slicer profile.",
                     "title": "Material",
                     "type": "string"
                   },
@@ -667,7 +667,7 @@
                     "type": "string"
                   },
                   "material": {
-                    "description": "PETG, ASA, TPU, or PA. PA-CF is accepted as its own note.",
+                    "description": "PLA, PETG, ABS, ASA, TPU, PA, or PA-CF. Notes are not a slicer profile.",
                     "title": "Material",
                     "type": "string"
                   }
