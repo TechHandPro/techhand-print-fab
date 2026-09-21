@@ -181,8 +181,8 @@ def _handoff_text(material_notes: dict[str, Any] | None) -> str:
         "2. Select the Bambu Lab X1 Carbon and a 0.4 mm nozzle.\n"
         f"3. {material_line}\n"
         "4. Slice and export a .gcode.3mf into this part directory or a directory on FAB_EXPORT_ROOTS.\n"
-        "5. Call fab_queue_print again with file_path set to that file, confirm true, "
-        "and BAMBU_PRINT_ENABLED=1.\n"
+        "5. Call fab_bambu_push_3mf again with file_path set to that file, dry_run false, "
+        "confirm true, and BAMBU_PRINT_ENABLED=1.\n"
         "\n"
         "These notes were not applied as a slicer profile. No printer job was submitted.\n"
     )

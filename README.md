@@ -98,8 +98,9 @@ Nothing in that setup calls TNT.
 | `fab_dfm_check` | Wall, hole, overhang, clearance, and 256 mm bed heuristics. |
 | `fab_x1c_profile_notes` | Starting notes for PETG, ASA, TPU, PA, and PA-CF. |
 | `fab_bom_sketch` | Filament mass and a fastener guess from hole diameters. |
-| `fab_discover_printers` | LAN detect probe, optional SSDP, optional Farm Manager device list. Does not print. |
-| `fab_queue_print` | Send a sliced `.gcode.3mf`, or write a Studio handoff for an unsliced STL/3MF plus X1C profile notes. |
+| `fab_bambu_discover` | List printers: host, model, state, and AMS when the printer exposes it. Does not print. |
+| `fab_bambu_status` | Nozzle temperature, bed temperature, and job progress. Does not queue a job. |
+| `fab_bambu_push_3mf` | Upload a sliced `.gcode.3mf` and queue it, or write a Studio handoff for an unsliced STL/3MF. `dry_run` defaults to true. |
 
 `backend` on `fab_param_model` is `openscad`, `cadquery`, or `both` (default). OpenSCAD stays the primary file whenever it is written.
 
@@ -168,7 +169,7 @@ Prefer Push stays held. Ticket attach stays the optional `extras/tnt` package.
 
 ## Bambu X1 Carbon print push
 
-The printer runs a sliced `.gcode.3mf`. `fab_export_stl` and `fab_export_3mf` write geometry only. `fab_queue_print` on those files writes a Studio handoff and does not start the printer. Slice the mesh in Bambu Studio or OrcaSlicer with an X1 Carbon profile, then queue the `.gcode.3mf`.
+The printer runs a sliced `.gcode.3mf`. `fab_export_stl` and `fab_export_3mf` write geometry only. `fab_bambu_push_3mf` on those files writes a Studio handoff and does not start the printer. Slice the mesh in Bambu Studio or OrcaSlicer with an X1 Carbon profile, then push the `.gcode.3mf`. Raw `.gcode` is not queued.
 
 The tool contract is also in `openapi/print-fab.openapi.json`. That file describes MCP tools. It is not a second HTTP API. Streamable HTTP is still the MCP endpoint at `/mcp`.
 
@@ -178,58 +179,67 @@ Bambu documents Developer Mode as the third-party control channel: MQTT on port 
 
 Farm Manager is optional. Its local REST API listens on port 8888. Use it when `BAMBU_TRANSPORT=farm`, or when `BAMBU_FARM_URL` is set and no LAN host is configured. A printer bound to Farm Manager closes its own MQTT port, so LAN and farm are two attachments. The cloud API is unused.
 
-`fab_discover_printers` reports `path: lan_developer_mode` and a `why` string with this choice. With `BAMBU_LAN_HOST` set it sends the printer's TCP 3000 detect frame. SSDP (UDP 2021 and 1990) runs only when you pass `ssdp: true` or set `BAMBU_DISCOVER_SSDP=1`.
+`fab_bambu_discover` reports `path: lan_developer_mode` and a `why` string with this choice. With `BAMBU_LAN_HOST` set it sends the printer's TCP 3000 detect frame. SSDP (UDP 2021 and 1990) runs only when you pass `ssdp: true` or set `BAMBU_DISCOVER_SSDP=1`. When `BAMBU_ACCESS_CODE` matches that serial, a read-only MQTT `pushall` fills `state` and `ams`.
 
 ### Printer setup
 
 1. On the X1 Carbon, turn on LAN Only mode.
 2. Turn on Developer Mode and accept the notice on the printer.
-3. Record the LAN IP, the access code, and the serial number.
+3. Record the LAN IP, the access code, and the serial number into the secret store. Do not paste them into chat.
 
-### Environment
+### Auth (orange-secret / vault inject)
 
-Put these in the MCP process environment. Keep them out of the repo. This package does not read a vault and does not write secrets into the project directory. Export them from your secret store when the process starts (a systemd `EnvironmentFile`, a vault agent template, or the `env` block of the MCP client).
+Secrets are process environment variables. This package does not read a vault file and does not write secrets into the project directory. Inject them when the MCP process starts (orange-secret, an org vault agent, a systemd `EnvironmentFile`, or the `env` block of the MCP client). Never paste an access code or token into chat, a ticket, a PR, or git.
 
-| Variable | LAN print | Purpose |
+| Variable | Secret | Purpose |
 | --- | --- | --- |
-| `BAMBU_LAN_HOST` | yes | Private IP or `.local` name. |
-| `BAMBU_ACCESS_CODE` | yes | LAN access code. FTPS and MQTT password. The username is `bblp`. |
-| `BAMBU_SERIAL` | yes | Printer serial. MQTT topics are `device/{serial}/request` and `device/{serial}/report`. |
-| `BAMBU_PRINT_ENABLED` | yes | `1` allows a confirmed queue to send. Unset or `0` returns a plan. |
+| `BAMBU_ACCESS_CODE` | yes | LAN access code. MQTT and FTPS password. The username is always `bblp` and is not a secret. |
+| `BAMBU_FARM_TOKEN` | yes | Farm Manager bearer token. Prefer this over the password. |
+| `BAMBU_FARM_PASSWORD` | yes | Farm Manager password, used only when `BAMBU_FARM_TOKEN` is unset. |
+| `BAMBU_FARM_USERNAME` | no | Farm Manager user paired with the password. |
+| `BAMBU_LAN_HOST` | no | Private IP or `.local` name. |
+| `BAMBU_SERIAL` | no | Printer serial. MQTT topics are `device/{serial}/request` and `device/{serial}/report`. |
+| `BAMBU_PRINT_ENABLED` | no | `1` allows a live push. Unset or `0` cannot queue a job. |
 | `BAMBU_DISCOVER_SSDP` | no | `1` also runs SSDP discovery. |
 | `BAMBU_ALLOW_NONPRIVATE_HOST` | no | `1` allows a public address. Leave unset. |
 | `BAMBU_TRANSPORT` | no | `lan` when a LAN host is set, otherwise `farm` if a farm URL is set. |
-| `BAMBU_FARM_URL` | farm | `https://192.168.x.x:8888` |
-| `BAMBU_FARM_TOKEN` | farm | Bearer JWT. Prefer this over the password. |
-| `BAMBU_FARM_USERNAME` | farm | Local Farm Manager user, used when the token is unset. |
-| `BAMBU_FARM_PASSWORD` | farm | Local Farm Manager password. Login is `POST /login/local/tickets` then `POST /login/local/tokens`. |
+| `BAMBU_FARM_URL` | no | `https://192.168.x.x:8888` |
 | `BAMBU_FARM_SERVER_ID` | no | Value for `x-bbl-sec-sid` when you already know it. |
 | `BAMBU_FARM_CA_FILE` | no | CA bundle for the farm server certificate. |
 | `BAMBU_FARM_CERT_FILE` | no | Optional client certificate for mTLS. |
-| `BAMBU_FARM_KEY_FILE` | no | Optional client key for mTLS. |
+| `BAMBU_FARM_KEY_FILE` | yes | Optional client key for mTLS. |
 | `BAMBU_FARM_TLS_INSECURE` | no | `1` skips farm TLS verification. The host still has to be private. Leave unset. |
 | `FAB_EXPORT_ROOTS` | no | Directory that holds a sliced `.gcode.3mf` from Studio. |
 
-`fab_queue_print` also requires `confirm: true` before it sends. An example connector with empty values is `examples/cursor-mcp.bambu.json`. Fill the values in the client config on the machine that runs the server, not in git.
+`examples/cursor-mcp.bambu.json` ships those names with empty values. Fill them in the client config on the machine that runs the server.
 
-LAN upload uses implicit FTPS on port 990 and stores the file in `/model` when that directory exists. The start command is MQTT `print.project_file` with `url` `ftp:///model/<file>.gcode.3mf` and `param` `Metadata/plate_1.gcode`. The `md5` field is sent empty. Profile notes ride along in the tool result. `profile_applied` stays false: this server does not ship a Bambu slicer profile and does not run a slicer.
+A live push also needs `dry_run: false` and `confirm: true`. The default `dry_run: true` uploads nothing and queues nothing.
+
+LAN upload uses implicit FTPS on port 990 and stores the file in `/model` when that directory exists. The start command is MQTT `print.project_file` with `url` `ftp:///model/<file>.gcode.3mf` and `param` `Metadata/plate_1.gcode`. The `md5` field is sent empty. `printer_dispatched` becomes true only after that command's ack is `success`, or after Farm Manager returns a task id. An upload that the printer does not accept stays `printer_dispatched: false`. Profile notes ride along in the tool result. `profile_applied` stays false: this server does not ship a Bambu slicer profile and does not run a slicer.
 
 ### PRINT dogfood: test plate
 
-1. Export the LAN variables for the X1 Carbon and set `BAMBU_PRINT_ENABLED=1`.
-2. `fab_create_project` with `name` `Test plate`.
-3. `fab_param_model` with `part_name` `plate` and `params` `{"kind":"plate","length_mm":20,"width_mm":20,"thickness_mm":3,"material":"PETG"}`.
-4. `fab_export_stl` on `plate`.
-5. `fab_queue_print` with that `project_id` and `part_name`. Expect `mode` `studio_handoff`, `printer_dispatched` false, and `studio-handoff/x1c-profile-notes.json` next to the part. Open the STL in Bambu Studio. Pick X1 Carbon, a 0.4 mm nozzle, and PETG. Check the notes against the spool datasheet. Slice. Export `plate.gcode.3mf` into the part directory or a folder listed in `FAB_EXPORT_ROOTS`.
-6. `fab_discover_printers`. Expect the LAN host. `reachable: true` means the TCP 3000 detect probe answered.
-7. `fab_queue_print` with `file_path` of that sliced file, `material` `PETG`, and `confirm` true. Expect `printer_dispatched` true and `dry_fire` false when the MQTT ack result is success.
-8. If the ack times out, Developer Mode is still off or the serial or access code does not match. The tool does not claim the job started. The file may already be on the printer.
+PRINT runs this list and reports PASS or FAIL for each step to PRODUCT and CREW. Include `mode`, `printer_dispatched`, and `message`. Omit every secret. Jeremiah owns the physical confirm on the first live push. PRINT does not mark that physical check PASS.
 
-A call with `confirm: false` returns `mode` `print_plan` and the `project_file` body. The access code is not in that body.
+Safe steps (no live push):
+
+1. Inject `BAMBU_LAN_HOST`, `BAMBU_ACCESS_CODE`, and `BAMBU_SERIAL`. Leave `BAMBU_PRINT_ENABLED` unset. **PASS:** the process starts and the values are not in the chat transcript. **FAIL:** a secret was pasted into chat or committed.
+2. `fab_bambu_discover`. **PASS:** `printer_dispatched` is false, and a printer row has `host`, `model`, and `state` (empty only when the status read failed and `status_error` says why). `ams` is an object when the printer exposed AMS, otherwise null. `reachable: true` means the TCP 3000 detect probe answered. **FAIL:** the call errors, or `printer_dispatched` is true.
+3. `fab_bambu_status`. **PASS:** `mode` is `status`, `printer_dispatched` is false, and the result has `nozzle_c`, `bed_c`, `state`, and `progress_percent` (null when the report omitted that field). **FAIL:** any of those keys are missing, or `printer_dispatched` is true.
+4. `fab_create_project` with `name` `Test plate`.
+5. `fab_param_model` with `part_name` `plate` and `params` `{"kind":"plate","length_mm":20,"width_mm":20,"thickness_mm":3,"material":"PETG"}`.
+6. `fab_export_stl` on `plate`.
+7. `fab_bambu_push_3mf` with that `project_id` and `part_name` (default `dry_run` true). **PASS:** `mode` is `studio_handoff`, `printer_dispatched` is false, and `studio-handoff/x1c-profile-notes.json` is next to the part. **FAIL:** `printer_dispatched` is true.
+8. Open the STL in Bambu Studio. Pick X1 Carbon, a 0.4 mm nozzle, and PETG. Check the notes against the spool datasheet. Slice. Export `plate.gcode.3mf` into the part directory or a folder listed in `FAB_EXPORT_ROOTS`.
+9. `fab_bambu_push_3mf` with `file_path` of that sliced file, `material` `PETG`, and `dry_run` true. **PASS:** `mode` is `dry_run`, `printer_dispatched` is false, and the `request` preview contains `project_file` with an empty `md5`. The access code is not in the result. **FAIL:** a file was uploaded or `printer_dispatched` is true.
+
+Live push (Jeremiah at the printer):
+
+10. Set `BAMBU_PRINT_ENABLED=1`. Jeremiah calls `fab_bambu_push_3mf` with that sliced `file_path`, `material` `PETG`, `dry_run` false, and `confirm` true. **Tool PASS:** `printer_dispatched` is true, `dry_fire` is false, and `ack_result` is `success` (LAN) or `task_id` is set (Farm Manager). **Tool FAIL:** `printer_dispatched` is false, including a timeout after upload. The file may already be on the printer; the tool does not claim the job was queued. **Physical confirm:** Jeremiah checks the printer panel. PRINT reports his confirm to PRODUCT and CREW and does not invent it.
 
 ### Farm Manager
 
-Set `BAMBU_TRANSPORT=farm`, `BAMBU_FARM_URL`, and `BAMBU_FARM_TOKEN` (or the username and password). `fab_discover_printers` calls `GET /devices`. `fab_queue_print` uploads with `POST /file/upload3mf` and creates the job with `POST /task`. `queue_only: true` sends `task_print_model` 0, which the Farm Manager client uses as a queue. Direct print sends `task_print_model` 1. Pass `device_id` when more than one printer is listed.
+Set `BAMBU_TRANSPORT=farm`, `BAMBU_FARM_URL`, and `BAMBU_FARM_TOKEN` (or `BAMBU_FARM_USERNAME` and `BAMBU_FARM_PASSWORD`). `fab_bambu_discover` calls `GET /devices` and returns host, model, state, and AMS when the device report includes them. `fab_bambu_status` reads that same report. `fab_bambu_push_3mf` uploads with `POST /file/upload3mf` and creates the job with `POST /task`. `queue_only: true` sends `task_print_model` 0. Direct print sends `task_print_model` 1. `printer_dispatched` is true only when that call returns a task id. Pass `device_id` when more than one printer is listed. The same dry-run and confirm gates apply.
 
 ## Guardrails
 
@@ -242,7 +252,7 @@ The server refuses a 1:1 copy of a proprietary commercial product.
 
 Design tools (`fab_create_project` through `fab_bom_sketch`) set `dry_fire: true` and `printer_dispatched: false`. Export copy says the mesh was written and no printer job was submitted. Profile notes are starting temperatures and habits for a person to type into OrcaSlicer or Bambu Studio. They are not an official Bambu profile and they are not applied to a slicer. Confirm them against the filament datasheet.
 
-`fab_discover_printers` does not print. `fab_queue_print` sets `printer_dispatched: true` and `dry_fire: false` only after the printer or Farm Manager accepts a sliced job. A geometry STL or 3MF writes a Studio handoff. A call without `confirm: true`, or with `BAMBU_PRINT_ENABLED` unset, returns a plan.
+`fab_bambu_discover` and `fab_bambu_status` do not print. `fab_bambu_push_3mf` sets `printer_dispatched: true` and `dry_fire: false` only after the printer or Farm Manager accepts a sliced job. A geometry STL or 3MF writes a Studio handoff. `dry_run: true` (the default), a missing `confirm: true`, or `BAMBU_PRINT_ENABLED` unset returns a plan and leaves `printer_dispatched` false.
 
 Print tools refuse firearm and other weapon-part requests from the job name, intent, and file name. Training-tool and general fab jobs stay in scope. A disclaimer in the text is not permission to queue a weapon part.
 

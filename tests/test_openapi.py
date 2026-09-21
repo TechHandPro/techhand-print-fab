@@ -15,8 +15,9 @@ def test_openapi_matches_registered_tools(server) -> None:
     assert document["info"]["version"]
     names = {path.rsplit("/", 1)[-1] for path in document["paths"]}
     assert names == set(tool_names(server))
-    assert "fab_queue_print" in names
-    assert "fab_discover_printers" in names
+    assert "fab_bambu_push_3mf" in names
+    assert "fab_bambu_discover" in names
+    assert "fab_bambu_status" in names
     on_disk = json.loads(_DOCUMENT.read_text(encoding="utf-8"))
     assert on_disk == document
     blob = json.dumps(document)

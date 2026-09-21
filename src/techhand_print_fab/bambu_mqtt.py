@@ -66,6 +66,9 @@ _ACK_TIMEOUT = (
     "No MQTT ack before the timeout. LAN Only mode and Developer Mode both have to be on. "
     "With Developer Mode off the printer accepts the connection and drops control commands."
 )
+_STATUS_TIMEOUT = (
+    "No status report before the timeout. LAN Only mode and Developer Mode both have to be on."
+)
 
 
 def encode_remaining_length(length: int) -> bytes:
@@ -153,6 +156,9 @@ def parse_connect(body: bytes) -> dict[str, str]:
     return {"client_id": client_id, "username": username, "password": password}
 
 
+Accept = Callable[[dict[str, Any]], bool]
+
+
 class MqttSession:
     def __init__(self, stream: ByteStream) -> None:
         self._stream = stream
@@ -169,6 +175,56 @@ class MqttSession:
         timeout_s: float,
     ) -> dict[str, Any]:
         sequence = str(payload["print"]["sequence_id"])
+        return self._exchange(
+            client_id=client_id,
+            username=username,
+            password=password,
+            report_topic=report_topic,
+            request_topic=request_topic,
+            payload=payload,
+            timeout_s=timeout_s,
+            timeout_message=_ACK_TIMEOUT,
+            accept=lambda body: str(body.get("sequence_id")) == sequence and "result" in body,
+        )
+
+    def collect(
+        self,
+        *,
+        client_id: str,
+        username: str,
+        password: str,
+        report_topic: str,
+        request_topic: str,
+        payload: dict[str, Any],
+        timeout_s: float,
+        accept: Accept,
+        timeout_message: str,
+    ) -> dict[str, Any]:
+        return self._exchange(
+            client_id=client_id,
+            username=username,
+            password=password,
+            report_topic=report_topic,
+            request_topic=request_topic,
+            payload=payload,
+            timeout_s=timeout_s,
+            timeout_message=timeout_message,
+            accept=accept,
+        )
+
+    def _exchange(
+        self,
+        *,
+        client_id: str,
+        username: str,
+        password: str,
+        report_topic: str,
+        request_topic: str,
+        payload: dict[str, Any],
+        timeout_s: float,
+        timeout_message: str,
+        accept: Accept,
+    ) -> dict[str, Any]:
         self._stream.set_timeout(timeout_s)
         self._stream.sendall(encode_connect(client_id, username, password))
         packet_type, _flags, body = read_packet(self._stream.recv_exact)
@@ -185,7 +241,7 @@ class MqttSession:
         while True:
             remaining = deadline - _now()
             if remaining <= 0:
-                raise BambuError(_ACK_TIMEOUT)
+                raise BambuError(timeout_message)
             self._stream.set_timeout(remaining)
             packet_type, flags, body = read_packet(self._stream.recv_exact)
             if packet_type != _PUBLISH:
@@ -198,8 +254,43 @@ class MqttSession:
             print_body = message.get("print") if isinstance(message, dict) else None
             if not isinstance(print_body, dict):
                 continue
-            if str(print_body.get("sequence_id")) == sequence and "result" in print_body:
+            if accept(print_body):
                 return print_body
+
+
+def _is_status_report(body: dict[str, Any]) -> bool:
+    return "gcode_state" in body or "nozzle_temper" in body
+
+
+def mqtt_status(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    serial: str,
+    payload: dict[str, Any],
+    timeout_s: float,
+    *,
+    allow_nonprivate: bool,
+) -> dict[str, Any]:
+    """Publish pushall and return the first print report that carries state or nozzle temperature."""
+    assert_private_host(host, allow_nonprivate=allow_nonprivate)
+    stream = open_tls_stream(host, port, timeout_s)
+    try:
+        session = MqttSession(stream)
+        return session.collect(
+            client_id=_client_id(),
+            username=username,
+            password=password,
+            report_topic=f"device/{serial}/report",
+            request_topic=f"device/{serial}/request",
+            payload=payload,
+            timeout_s=timeout_s,
+            timeout_message=_STATUS_TIMEOUT,
+            accept=_is_status_report,
+        )
+    finally:
+        stream.close()
 
 
 def mqtt_request(

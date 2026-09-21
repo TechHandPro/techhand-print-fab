@@ -19,6 +19,7 @@ from techhand_print_fab.bambu_config import (
 from techhand_print_fab.bambu_farm import FarmClient
 from techhand_print_fab.bambu_frames import build_project_file, safe_remote_name, task_label
 from techhand_print_fab.bambu_lan import send_lan
+from techhand_print_fab.bambu_status import fetch_lan_status
 from techhand_print_fab.policy import screen, screen_weapon
 from techhand_print_fab.print_files import (
     classify_mesh,
@@ -46,6 +47,7 @@ def queue_print(
     material: str = "",
     intent: str = "",
     confirm: bool = False,
+    dry_run: bool = True,
     transport: str = "",
     device_id: str = "",
     plate: int = 1,
@@ -72,6 +74,7 @@ def queue_print(
             material=material,
             intent=intent,
             confirm=confirm,
+            dry_run=dry_run,
             transport=transport,
             device_id=device_id,
             plate=plate,
@@ -103,6 +106,25 @@ def queue_print(
     scrubbed = scrub_obj(payload, secrets)
     if not isinstance(scrubbed, dict):
         raise BambuError("Print result was empty.")
+    return scrubbed
+
+
+def read_printer_status(*, transport: str = "", device_id: str = "") -> dict[str, Any]:
+    """Nozzle, bed, and job progress. Never uploads and never sets printer_dispatched."""
+    try:
+        config = load_config()
+    except BambuError as exc:
+        return print_result(ok=False, message=str(exc), printer_dispatched=False, mode="print_error")
+    secrets = secret_values(config)
+    try:
+        payload = _status(config, transport=transport, device_id=device_id)
+    except (BambuError, StoreError) as exc:
+        payload = print_result(ok=False, message=str(exc), printer_dispatched=False, mode="print_error")
+    if payload.get("printer_dispatched"):
+        raise BambuError("Status cannot report a queued job.")
+    scrubbed = scrub_obj(payload, secrets)
+    if not isinstance(scrubbed, dict):
+        raise BambuError("Status result was empty.")
     return scrubbed
 
 
@@ -159,6 +181,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
     use_ams = _as_bool(kwargs["use_ams"], "use_ams")
     queue_only = _as_bool(kwargs["queue_only"], "queue_only")
     confirm = kwargs["confirm"] is True
+    dry_run = _as_bool(kwargs["dry_run"], "dry_run")
     bed_type = str(kwargs["bed_type"] or "auto").strip().lower()
     if bed_type not in _BED_TYPES:
         raise BambuError("bed_type must be auto, hot_plate, textured_plate, cool_plate, or engineering_plate.")
@@ -217,13 +240,14 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         transport_name = resolve_transport(config, str(kwargs["transport"] or ""))
     except BambuError as exc:
         unconfigured = str(exc).startswith("Set BAMBU_LAN_HOST")
-        if not unconfigured or (confirm and config.print_enabled):
+        if not unconfigured or (confirm and config.print_enabled and not dry_run):
             raise
         return print_result(
             ok=True,
             message=str(exc),
             printer_dispatched=False,
-            mode="print_plan",
+            mode="dry_run" if dry_run else "print_plan",
+            dry_run=dry_run,
             sliced=True,
             transport="",
             request=None,
@@ -248,31 +272,44 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         ams_mapping=ams_mapping,
     )
     lan_queue_only = queue_only and transport_name == "lan"
-    wants_send = confirm and config.print_enabled and not lan_queue_only
+    wants_send = (not dry_run) and confirm and config.print_enabled and not lan_queue_only
     missing = _missing_for(config, transport_name)
     if wants_send and missing:
         raise BambuError("Print needs " + ", ".join(missing) + ".")
     if not wants_send:
         gates = []
+        if dry_run:
+            gates.append("dry_run")
         if not confirm:
             gates.append("confirm")
         if not config.print_enabled:
             gates.append("BAMBU_PRINT_ENABLED")
-        if lan_queue_only:
+        if dry_run:
+            message = (
+                "Dry run. No file was uploaded and no job was queued. "
+                "printer_dispatched stays false. A live push needs dry_run false, confirm true, "
+                "and BAMBU_PRINT_ENABLED=1."
+            )
+            mode = "dry_run"
+        elif lan_queue_only:
             message = (
                 "queue_only on LAN does not upload. The printer starts the job when it accepts "
-                "project_file. Pass queue_only false, with confirm true and BAMBU_PRINT_ENABLED=1, to print."
+                "project_file. Pass queue_only false, with dry_run false, confirm true, "
+                "and BAMBU_PRINT_ENABLED=1, to print."
             )
+            mode = "print_plan"
         else:
             message = (
                 "Sliced file is ready. No printer job was sent. "
-                "Set BAMBU_PRINT_ENABLED=1 and pass confirm true to send it."
+                "Set BAMBU_PRINT_ENABLED=1 and pass dry_run false with confirm true to send it."
             )
+            mode = "print_plan"
         return print_result(
             ok=True,
             message=message,
             printer_dispatched=False,
-            mode="print_plan",
+            mode=mode,
+            dry_run=dry_run,
             sliced=True,
             transport=transport_name,
             request=preview if transport_name == "lan" else {"transport": "farm", "queue_only": queue_only},
@@ -321,6 +358,8 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         device_id=str(sent.get("device_id") or ""),
         transport=transport_name,
         request=sent.get("request"),
+        dry_run=False,
+        queued=True,
         **common,
     )
 
@@ -484,7 +523,7 @@ def _choose_device(devices: list[dict[str, Any]], device_id: str) -> str:
         return ids[0]
     if not ids:
         raise BambuError("Farm Manager returned no printers. Pass device_id or bind the X1 Carbon.")
-    raise BambuError("Farm Manager has more than one printer. Pass device_id from fab_discover_printers.")
+    raise BambuError("Farm Manager has more than one printer. Pass device_id from fab_bambu_discover.")
 
 
 def _bounded_int(value: object, name: str, low: int, high: int) -> int:
@@ -509,6 +548,63 @@ def _as_bool(value: object, name: str) -> bool:
     if not isinstance(value, bool):
         raise BambuError(f"{name} must be a boolean.")
     return value
+
+
+def _status(config: BambuConfig, *, transport: str, device_id: str) -> dict[str, Any]:
+    if device_id and _DEVICE.fullmatch(device_id) is None:
+        raise BambuError("device_id must be 4 to 40 letters, digits, underscores, or hyphens.")
+    transport_name = resolve_transport(config, transport)
+    missing = _missing_for(config, transport_name)
+    if missing:
+        raise BambuError("Status needs " + ", ".join(missing) + ".")
+    _check_secret_shape(config, transport_name)
+    match transport_name:
+        case "lan":
+            snapshot = fetch_lan_status(config, config.lan_host, config.serial)
+            return print_result(
+                ok=True,
+                message="Printer status. No file was uploaded and no job was queued.",
+                printer_dispatched=False,
+                mode="status",
+                transport="lan",
+                host=config.lan_host,
+                serial=config.serial,
+                model="",
+                **snapshot,
+            )
+        case "farm":
+            devices = FarmClient(config).list_devices()
+            chosen = _choose_device(devices, device_id)
+            device = next((item for item in devices if str(item.get("serial")) == chosen), None)
+            if device is None:
+                raise BambuError("device_id is not on this Farm Manager server.")
+            return print_result(
+                ok=True,
+                message=(
+                    "Farm Manager device status. Nozzle and bed stay null when the device report omits them. "
+                    "No file was uploaded and no job was queued."
+                ),
+                printer_dispatched=False,
+                mode="status",
+                transport="farm",
+                host=str(device.get("host") or ""),
+                serial=chosen,
+                model=str(device.get("model") or ""),
+                state=str(device.get("state") or ""),
+                nozzle_c=device.get("nozzle_c"),
+                nozzle_target_c=device.get("nozzle_target_c"),
+                bed_c=device.get("bed_c"),
+                bed_target_c=device.get("bed_target_c"),
+                progress_percent=device.get("progress_percent"),
+                remaining_minutes=device.get("remaining_minutes"),
+                layer=device.get("layer"),
+                total_layers=device.get("total_layers"),
+                job_name=str(device.get("job_name") or ""),
+                ams=device.get("ams"),
+                device_id=chosen,
+            )
+        case _ as unknown:
+            _never(unknown)
 
 
 def _never(value: Never) -> Never:

@@ -50,7 +50,7 @@ def test_unsliced_stl_is_a_studio_handoff(server, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("techhand_print_fab.print_job.send_lan", lambda *args, **kwargs: calls.append(args))
     project_id = _plate(server)
     tool_payload(server, "fab_export_stl", {"project_id": project_id, "part_name": "plate"})
-    result = tool_payload(server, "fab_queue_print", {"project_id": project_id, "part_name": "plate"})
+    result = tool_payload(server, "fab_bambu_push_3mf", {"project_id": project_id, "part_name": "plate"})
     assert result["ok"] is True
     assert result["mode"] == "studio_handoff"
     assert result["sliced"] is False
@@ -72,7 +72,7 @@ def test_trainer_part_name_still_hands_off(server, monkeypatch: pytest.MonkeyPat
     tool_payload(server, "fab_export_stl", {"project_id": project_id, "part_name": "trainer-trigger-lever"})
     result = tool_payload(
         server,
-        "fab_queue_print",
+        "fab_bambu_push_3mf",
         {"project_id": project_id, "part_name": "trainer-trigger-lever"},
     )
     assert result["refused"] is False
@@ -83,12 +83,12 @@ def test_weapon_and_disclaimer_are_refused_before_upload(server, monkeypatch: py
     calls: list[object] = []
     monkeypatch.setattr("techhand_print_fab.print_job.send_lan", lambda *args, **kwargs: calls.append(args))
     project_id = _plate(server, part_name="firearm frame")
-    refused = tool_payload(server, "fab_queue_print", {"project_id": project_id, "part_name": "firearm frame"})
+    refused = tool_payload(server, "fab_bambu_push_3mf", {"project_id": project_id, "part_name": "firearm frame"})
     assert refused["refused"] is True
     assert refused["policy"] == "weapon_part"
     assert refused["printer_dispatched"] is False
     described = _plate(server, description="this is not a firearm")
-    also = tool_payload(server, "fab_queue_print", {"project_id": described, "part_name": "plate"})
+    also = tool_payload(server, "fab_bambu_push_3mf", {"project_id": described, "part_name": "plate"})
     assert also["refused"] is True
     assert calls == []
 
@@ -114,10 +114,11 @@ def test_sliced_file_plans_until_confirm_and_the_env_flag(server, monkeypatch: p
     _enable(monkeypatch)
     planned = tool_payload(
         server,
-        "fab_queue_print",
+        "fab_bambu_push_3mf",
         {"project_id": project_id, "part_name": "plate", "confirm": False},
     )
-    assert planned["mode"] == "print_plan"
+    assert planned["mode"] == "dry_run"
+    assert planned["dry_run"] is True
     assert planned["printer_dispatched"] is False
     assert planned["request"]["print"]["command"] == "project_file"
     assert planned["request"]["print"]["md5"] == ""
@@ -126,8 +127,8 @@ def test_sliced_file_plans_until_confirm_and_the_env_flag(server, monkeypatch: p
     monkeypatch.delenv("BAMBU_PRINT_ENABLED")
     held = tool_payload(
         server,
-        "fab_queue_print",
-        {"project_id": project_id, "part_name": "plate", "confirm": True},
+        "fab_bambu_push_3mf",
+        {"project_id": project_id, "part_name": "plate", "confirm": True, "dry_run": False},
     )
     assert held["mode"] == "print_plan"
     assert "BAMBU_PRINT_ENABLED" in held["missing"]
@@ -155,8 +156,8 @@ def test_confirmed_sliced_job_dispatches_on_lan(server, monkeypatch: pytest.Monk
     _enable(monkeypatch)
     result = tool_payload(
         server,
-        "fab_queue_print",
-        {"project_id": project_id, "part_name": "plate", "confirm": True, "material": "PETG"},
+        "fab_bambu_push_3mf",
+        {"project_id": project_id, "part_name": "plate", "confirm": True, "dry_run": False, "material": "PETG"},
     )
     assert result["ok"] is True
     assert result["mode"] == "print_dispatch"
@@ -179,8 +180,8 @@ def test_rejection_and_secrets_stay_out_of_the_result(server, monkeypatch: pytes
     _enable(monkeypatch)
     result = tool_payload(
         server,
-        "fab_queue_print",
-        {"project_id": project_id, "part_name": "plate", "confirm": True},
+        "fab_bambu_push_3mf",
+        {"project_id": project_id, "part_name": "plate", "confirm": True, "dry_run": False},
     )
     assert result["ok"] is False
     assert result["printer_dispatched"] is False
@@ -200,7 +201,7 @@ def test_public_host_and_missing_plate_do_not_dispatch(server, monkeypatch: pyte
     _enable(monkeypatch)
     missing_plate = tool_payload(
         server,
-        "fab_queue_print",
+        "fab_bambu_push_3mf",
         {"project_id": project_id, "part_name": "plate", "confirm": True, "plate": 1},
     )
     assert missing_plate["ok"] is False
@@ -209,7 +210,7 @@ def test_public_host_and_missing_plate_do_not_dispatch(server, monkeypatch: pyte
     _enable(monkeypatch, host="8.8.8.8")
     public = tool_payload(
         server,
-        "fab_queue_print",
+        "fab_bambu_push_3mf",
         {"project_id": project_id, "part_name": "plate", "confirm": True},
     )
     assert public["ok"] is False
@@ -240,18 +241,19 @@ def test_lan_queue_only_does_not_upload_and_farm_is_explicit(server, monkeypatch
     monkeypatch.setenv("BAMBU_FARM_TOKEN", "farm-token-value")
     held = tool_payload(
         server,
-        "fab_queue_print",
-        {"project_id": project_id, "part_name": "plate", "confirm": True, "queue_only": True},
+        "fab_bambu_push_3mf",
+        {"project_id": project_id, "part_name": "plate", "confirm": True, "dry_run": False, "queue_only": True},
     )
     assert held["mode"] == "print_plan"
     assert lan_calls == []
     farm = tool_payload(
         server,
-        "fab_queue_print",
+        "fab_bambu_push_3mf",
         {
             "project_id": project_id,
             "part_name": "plate",
             "confirm": True,
+            "dry_run": False,
             "transport": "farm",
             "device_id": "00M09A123456789",
             "use_ams": False,
@@ -266,7 +268,7 @@ def test_lan_queue_only_does_not_upload_and_farm_is_explicit(server, monkeypatch
 
 
 def test_discover_tool_with_no_printer_configured(server) -> None:
-    result = tool_payload(server, "fab_discover_printers", {})
+    result = tool_payload(server, "fab_bambu_discover", {})
     assert result["ok"] is True
     assert result["printers"] == []
     assert result["mode"] == "discover"
@@ -278,17 +280,104 @@ def test_bad_material_is_rejected(server) -> None:
     project_id = _plate(server)
     result = tool_payload(
         server,
-        "fab_queue_print",
+        "fab_bambu_push_3mf",
         {"project_id": project_id, "part_name": "plate", "material": "wood"},
     )
     assert result["ok"] is False
     assert "PETG" in result["message"]
 
 
+def test_dry_run_blocks_a_confirmed_enabled_push(server, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr("techhand_print_fab.print_job.send_lan", lambda *args, **kwargs: calls.append(args))
+    project_id = _plate(server)
+    write_sliced(get_store().part_dir(project_id, "plate") / "model.gcode.3mf")
+    _enable(monkeypatch)
+    result = tool_payload(
+        server,
+        "fab_bambu_push_3mf",
+        {"project_id": project_id, "part_name": "plate", "confirm": True, "dry_run": True},
+    )
+    assert result["ok"] is True
+    assert result["mode"] == "dry_run"
+    assert result["printer_dispatched"] is False
+    assert result["dry_fire"] is True
+    assert calls == []
+
+
+def test_status_reads_temperatures_without_queueing(server, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake(_config: object, host: str, serial: str) -> dict[str, object]:
+        assert host == "127.0.0.1"
+        assert serial == "00M09A123456789"
+        return {
+            "nozzle_c": 215.0,
+            "nozzle_target_c": 220.0,
+            "bed_c": 60.0,
+            "bed_target_c": 65.0,
+            "state": "RUNNING",
+            "progress_percent": 12.0,
+            "remaining_minutes": 40.0,
+            "layer": 3.0,
+            "total_layers": 20.0,
+            "job_name": "plate",
+            "ams": {"present": True, "trays": [{"slot": "0", "type": "PETG"}]},
+        }
+
+    monkeypatch.setattr("techhand_print_fab.print_job.fetch_lan_status", fake)
+    _enable(monkeypatch)
+    result = tool_payload(server, "fab_bambu_status", {})
+    assert result["ok"] is True
+    assert result["mode"] == "status"
+    assert result["printer_dispatched"] is False
+    assert result["dry_fire"] is True
+    assert result["nozzle_c"] == 215.0
+    assert result["bed_c"] == 60.0
+    assert result["progress_percent"] == 12.0
+    assert result["state"] == "RUNNING"
+    assert result["ams"]["trays"][0]["type"] == "PETG"
+    assert ACCESS not in json.dumps(result)
+
+
+def test_status_error_scrubs_the_access_code(server, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake(_config: object, _host: str, _serial: str) -> dict[str, object]:
+        raise BambuError(f"rejected {ACCESS}")
+
+    monkeypatch.setattr("techhand_print_fab.print_job.fetch_lan_status", fake)
+    _enable(monkeypatch)
+    result = tool_payload(server, "fab_bambu_status", {})
+    assert result["ok"] is False
+    assert result["printer_dispatched"] is False
+    assert ACCESS not in json.dumps(result)
+    assert "***" in result["message"]
+
+
+def test_raw_gcode_is_not_reported_as_queued(server, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr("techhand_print_fab.print_job.send_lan", lambda *args, **kwargs: calls.append(args))
+    project_id = _plate(server)
+    path = get_store().part_dir(project_id, "plate") / "plate.gcode"
+    path.write_bytes(b"G28\n")
+    _enable(monkeypatch)
+    result = tool_payload(
+        server,
+        "fab_bambu_push_3mf",
+        {
+            "project_id": project_id,
+            "part_name": "plate",
+            "file_path": "plate.gcode",
+            "confirm": True,
+            "dry_run": False,
+        },
+    )
+    assert result["ok"] is False
+    assert result["printer_dispatched"] is False
+    assert calls == []
+
+
 def test_unconfigured_sliced_file_is_a_plan(server) -> None:
     project_id = _plate(server)
     write_sliced(get_store().part_dir(project_id, "plate") / "model.gcode.3mf")
-    result = tool_payload(server, "fab_queue_print", {"project_id": project_id, "part_name": "plate"})
-    assert result["mode"] == "print_plan"
+    result = tool_payload(server, "fab_bambu_push_3mf", {"project_id": project_id, "part_name": "plate"})
+    assert result["mode"] == "dry_run"
     assert result["printer_dispatched"] is False
     assert "BAMBU_LAN_HOST" in result["message"]

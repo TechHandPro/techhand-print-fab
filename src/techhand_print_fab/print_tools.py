@@ -10,7 +10,7 @@ from pydantic import Field
 
 from techhand_print_fab.bambu_config import BambuError, load_config, scrub_obj, secret_values
 from techhand_print_fab.bambu_discover import discover_printers
-from techhand_print_fab.print_job import queue_print
+from techhand_print_fab.print_job import queue_print, read_printer_status
 from techhand_print_fab.results import print_result
 
 _DISCOVER = ToolAnnotations(
@@ -28,11 +28,12 @@ _QUEUE = ToolAnnotations(
 
 
 def register_print_tools(server: MCPServer) -> None:
-    server.add_tool(fab_discover_printers, annotations=_DISCOVER)
-    server.add_tool(fab_queue_print, annotations=_QUEUE)
+    server.add_tool(fab_bambu_discover, annotations=_DISCOVER)
+    server.add_tool(fab_bambu_status, annotations=_DISCOVER)
+    server.add_tool(fab_bambu_push_3mf, annotations=_QUEUE)
 
 
-def fab_discover_printers(
+def fab_bambu_discover(
     ssdp: Annotated[
         bool,
         Field(
@@ -47,27 +48,42 @@ def fab_discover_printers(
         Field(description="lan, farm, or both. Empty uses whichever of LAN and Farm Manager is configured."),
     ] = "",
 ) -> dict[str, Any]:
-    """Find a Bambu printer on the LAN or on a configured Farm Manager server.
+    """List Bambu printers on the LAN or on a configured Farm Manager server.
 
-    Does not upload a file and does not start a print. A configured BAMBU_LAN_HOST
-    is probed with the printer TCP 3000 detect frame. LAN Developer Mode is the
-    print path this server implements. Farm Manager is optional. The cloud API is not used.
+    Each printer includes host, model, state, and ams. ams is null when the printer
+    did not expose an AMS object. Does not upload a file and does not start a print.
+    printer_dispatched stays false. A configured BAMBU_LAN_HOST is probed with the
+    TCP 3000 detect frame. When BAMBU_ACCESS_CODE and the serial are set, a read-only
+    MQTT pushall fills state and AMS. LAN Developer Mode is the print path. Farm
+    Manager is optional. The cloud API is not used.
     """
     try:
-        return discover_printers(ssdp=ssdp, transport=transport)
+        payload = discover_printers(ssdp=ssdp, transport=transport)
     except BambuError as exc:
         payload = print_result(ok=False, message=str(exc), printer_dispatched=False, mode="print_error")
-        try:
-            secrets = secret_values(load_config())
-        except BambuError:
-            secrets = ()
-        scrubbed = scrub_obj(payload, secrets)
-        if not isinstance(scrubbed, dict):
-            return payload
-        return scrubbed
+    return _scrubbed(payload)
 
 
-def fab_queue_print(
+def fab_bambu_status(
+    transport: Annotated[
+        str,
+        Field(description="lan or farm. Empty uses LAN when BAMBU_LAN_HOST is set, otherwise Farm Manager."),
+    ] = "",
+    device_id: Annotated[
+        str,
+        Field(description="Farm Manager dev_id when more than one printer is listed. Ignored on LAN."),
+    ] = "",
+) -> dict[str, Any]:
+    """Read nozzle temperature, bed temperature, and job progress.
+
+    LAN uses a read-only MQTT pushall. Farm Manager reads the device report from
+    GET /devices. This tool does not upload a file and does not queue a job.
+    printer_dispatched stays false. Credentials come from the process environment.
+    """
+    return read_printer_status(transport=transport, device_id=device_id)
+
+
+def fab_bambu_push_3mf(
     project_id: Annotated[str, Field(description="Project id from fab_create_project. Pair with part_name.")] = "",
     part_name: Annotated[str, Field(description="Part name or slug. Pair with project_id.")] = "",
     file_path: Annotated[
@@ -87,8 +103,17 @@ def fab_queue_print(
     intent: Annotated[str, Field(description="What this original training-tool or fab part is. Weapon-part requests are refused.")] = "",
     confirm: Annotated[
         bool,
-        Field(description="True sends a sliced job. False returns a plan. Also requires BAMBU_PRINT_ENABLED=1."),
+        Field(description="True is required for a live push. Also requires dry_run false and BAMBU_PRINT_ENABLED=1."),
     ] = False,
+    dry_run: Annotated[
+        bool,
+        Field(
+            description=(
+                "True (default) uploads nothing and queues nothing. "
+                "False is a live push and still requires confirm true and BAMBU_PRINT_ENABLED=1."
+            )
+        ),
+    ] = True,
     transport: Annotated[
         str,
         Field(description="lan or farm. Empty uses LAN when BAMBU_LAN_HOST is set, otherwise Farm Manager."),
@@ -121,14 +146,17 @@ def fab_queue_print(
         ),
     ] = False,
 ) -> dict[str, Any]:
-    """Queue a sliced .gcode.3mf to a Bambu X1 Carbon, or hand an unsliced STL/3MF to Bambu Studio.
+    """Upload a sliced .gcode.3mf and queue it, or hand an unsliced STL/3MF to Bambu Studio.
 
-    LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the print path. Farm Manager
-    is used when transport is farm, or when BAMBU_FARM_URL is set and no LAN host is configured.
-    Geometry-only STL and 3MF files are not sent. The tool writes a Studio handoff and X1 Carbon
-    profile notes. confirm true and BAMBU_PRINT_ENABLED=1 are both required before a job is sent.
-    Firearm and other weapon-part requests are refused. Training-tool and general fab jobs are in scope.
-    Credentials come from the process environment, not from the repo.
+    printer_dispatched is true only after the printer or Farm Manager accepts the job.
+    An upload that is not accepted stays false. dry_run defaults to true and does not
+    upload or queue. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.
+    Raw .gcode is not a job. LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the
+    print path. Farm Manager is used when transport is farm, or when BAMBU_FARM_URL is set
+    and no LAN host is configured. Geometry-only STL and 3MF files are not sent. The tool
+    writes a Studio handoff and X1 Carbon profile notes. Firearm and other weapon-part
+    requests are refused. Training-tool and general fab jobs are in scope. Credentials
+    come from the process environment, not from the repo.
     """
     return queue_print(
         project_id=project_id,
@@ -137,6 +165,7 @@ def fab_queue_print(
         material=material,
         intent=intent,
         confirm=confirm,
+        dry_run=dry_run,
         transport=transport,
         device_id=device_id,
         plate=plate,
@@ -149,3 +178,14 @@ def fab_queue_print(
         bed_type=bed_type,
         queue_only=queue_only,
     )
+
+
+def _scrubbed(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        secrets = secret_values(load_config())
+    except BambuError:
+        secrets = ()
+    scrubbed = scrub_obj(payload, secrets)
+    if not isinstance(scrubbed, dict):
+        return payload
+    return scrubbed

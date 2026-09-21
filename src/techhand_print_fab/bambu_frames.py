@@ -78,6 +78,82 @@ def plate_param(plate: int) -> str:
     return f"Metadata/plate_{plate}.gcode"
 
 
+def build_pushall(sequence_id: str) -> dict[str, Any]:
+    """Read-only status request. The printer answers on the report topic."""
+    return {
+        "pushing": {
+            "sequence_id": sequence_id,
+            "command": "pushall",
+            "version": 1,
+            "push_target": 1,
+        }
+    }
+
+
+def status_snapshot(body: dict[str, Any]) -> dict[str, Any]:
+    """Temperatures and job progress from a push_status report. Missing fields stay null."""
+    return {
+        "nozzle_c": _optional_number(body.get("nozzle_temper")),
+        "nozzle_target_c": _optional_number(body.get("nozzle_target_temper")),
+        "bed_c": _optional_number(body.get("bed_temper")),
+        "bed_target_c": _optional_number(body.get("bed_target_temper")),
+        "state": str(body.get("gcode_state") or ""),
+        "progress_percent": _optional_number(body.get("mc_percent")),
+        "remaining_minutes": _optional_number(body.get("mc_remaining_time")),
+        "layer": _optional_number(body.get("layer_num")),
+        "total_layers": _optional_number(body.get("total_layer_num")),
+        "job_name": str(body.get("subtask_name") or body.get("gcode_file") or ""),
+        "ams": summarize_ams(body.get("ams")),
+    }
+
+
+def summarize_ams(raw: object) -> dict[str, Any] | None:
+    """None when the payload has no AMS object. An empty unit list is exposed and present false."""
+    if not isinstance(raw, dict):
+        return None
+    trays: list[dict[str, Any]] = []
+    units = raw.get("ams")
+    if isinstance(units, list):
+        for unit in units:
+            if not isinstance(unit, dict):
+                continue
+            unit_id = str(unit.get("id") or "0")
+            slots = unit.get("tray")
+            if not isinstance(slots, list):
+                continue
+            for slot in slots:
+                if not isinstance(slot, dict):
+                    continue
+                material = str(slot.get("tray_type") or "")
+                slot_id = str(slot.get("id") or "")
+                if not material and not slot_id:
+                    continue
+                trays.append(
+                    {
+                        "ams_id": unit_id,
+                        "slot": slot_id,
+                        "type": material,
+                        "color": str(slot.get("tray_color") or ""),
+                        "remain": _optional_number(slot.get("remain")),
+                    }
+                )
+    bits = str(raw.get("ams_exist_bits") or "")
+    return {"present": bits not in {"", "0"} or bool(trays), "trays": trays}
+
+
+def _optional_number(value: object) -> float | None:
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
 def plate_pattern() -> re.Pattern[str]:
     return _PLATE_NAME
 

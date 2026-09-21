@@ -36,12 +36,249 @@
     }
   },
   "info": {
-    "description": "Tool contract for the techhand-print-fab MCP server. Clients speak MCP on stdio or Streamable HTTP at /mcp. These paths are not served as REST. Design tools stay dry-fire. fab_queue_print dispatches a sliced .gcode.3mf only when confirm is true and BAMBU_PRINT_ENABLED=1. LAN Developer Mode is the print path. Credentials are environment variables, never this file.",
+    "description": "Tool contract for the techhand-print-fab MCP server. Clients speak MCP on stdio or Streamable HTTP at /mcp. These paths are not served as REST. Design tools stay dry-fire. fab_bambu_push_3mf dispatches a sliced .gcode.3mf only when dry_run is false, confirm is true, and BAMBU_PRINT_ENABLED=1. printer_dispatched is true only after the job is accepted. LAN Developer Mode is the print path. Credentials are environment variables, never this file.",
     "title": "techhand-print-fab MCP tools",
     "version": "0.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/tools/fab_bambu_discover": {
+      "post": {
+        "description": "List Bambu printers on the LAN or on a configured Farm Manager server.\n\n    Each printer includes host, model, state, and ams. ams is null when the printer\n    did not expose an AMS object. Does not upload a file and does not start a print.\n    printer_dispatched stays false. A configured BAMBU_LAN_HOST is probed with the\n    TCP 3000 detect frame. When BAMBU_ACCESS_CODE and the serial are set, a read-only\n    MQTT pushall fills state and AMS. LAN Developer Mode is the print path. Farm\n    Manager is optional. The cloud API is not used.\n    ",
+        "operationId": "fab_bambu_discover",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "ssdp": {
+                    "default": false,
+                    "description": "Send an SSDP M-SEARCH on UDP 2021 and 1990. Default false. BAMBU_DISCOVER_SSDP=1 also turns the scan on.",
+                    "title": "Ssdp",
+                    "type": "boolean"
+                  },
+                  "transport": {
+                    "default": "",
+                    "description": "lan, farm, or both. Empty uses whichever of LAN and Farm Manager is configured.",
+                    "title": "Transport",
+                    "type": "string"
+                  }
+                },
+                "title": "fab_bambu_discoverArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "MCP tool result. printer_dispatched is true only after a sliced job is accepted."
+          }
+        },
+        "summary": "fab_bambu_discover"
+      }
+    },
+    "/tools/fab_bambu_push_3mf": {
+      "post": {
+        "description": "Upload a sliced .gcode.3mf and queue it, or hand an unsliced STL/3MF to Bambu Studio.\n\n    printer_dispatched is true only after the printer or Farm Manager accepts the job.\n    An upload that is not accepted stays false. dry_run defaults to true and does not\n    upload or queue. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.\n    Raw .gcode is not a job. LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the\n    print path. Farm Manager is used when transport is farm, or when BAMBU_FARM_URL is set\n    and no LAN host is configured. Geometry-only STL and 3MF files are not sent. The tool\n    writes a Studio handoff and X1 Carbon profile notes. Firearm and other weapon-part\n    requests are refused. Training-tool and general fab jobs are in scope. Credentials\n    come from the process environment, not from the repo.\n    ",
+        "operationId": "fab_bambu_push_3mf",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "ams_slot": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "AMS tray index 0-15 when use_ams is true. Null lets the printer or farm match.",
+                    "title": "Ams Slot"
+                  },
+                  "bed_leveling": {
+                    "default": true,
+                    "description": "Run bed leveling with the job.",
+                    "title": "Bed Leveling",
+                    "type": "boolean"
+                  },
+                  "bed_type": {
+                    "default": "auto",
+                    "description": "auto, hot_plate, textured_plate, cool_plate, or engineering_plate.",
+                    "title": "Bed Type",
+                    "type": "string"
+                  },
+                  "confirm": {
+                    "default": false,
+                    "description": "True is required for a live push. Also requires dry_run false and BAMBU_PRINT_ENABLED=1.",
+                    "title": "Confirm",
+                    "type": "boolean"
+                  },
+                  "device_id": {
+                    "default": "",
+                    "description": "Farm Manager dev_id when more than one printer is listed. Ignored on LAN.",
+                    "title": "Device Id",
+                    "type": "string"
+                  },
+                  "dry_run": {
+                    "default": true,
+                    "description": "True (default) uploads nothing and queues nothing. False is a live push and still requires confirm true and BAMBU_PRINT_ENABLED=1.",
+                    "title": "Dry Run",
+                    "type": "boolean"
+                  },
+                  "file_path": {
+                    "default": "",
+                    "description": "Optional .stl, .3mf, or sliced .gcode.3mf under the part directory, the project directory, or FAB_EXPORT_ROOTS. Empty uses model.gcode.3mf, then model.3mf, then model.stl.",
+                    "title": "File Path",
+                    "type": "string"
+                  },
+                  "flow_cali": {
+                    "default": true,
+                    "description": "Run flow calibration with the job.",
+                    "title": "Flow Cali",
+                    "type": "boolean"
+                  },
+                  "intent": {
+                    "default": "",
+                    "description": "What this original training-tool or fab part is. Weapon-part requests are refused.",
+                    "title": "Intent",
+                    "type": "string"
+                  },
+                  "material": {
+                    "default": "",
+                    "description": "PETG, ASA, TPU, PA, or PA-CF. Empty uses the part material. Notes are not a slicer profile.",
+                    "title": "Material",
+                    "type": "string"
+                  },
+                  "part_name": {
+                    "default": "",
+                    "description": "Part name or slug. Pair with project_id.",
+                    "title": "Part Name",
+                    "type": "string"
+                  },
+                  "plate": {
+                    "default": 1,
+                    "description": "Plate number inside the sliced 3MF. Default 1.",
+                    "maximum": 16,
+                    "minimum": 1,
+                    "title": "Plate",
+                    "type": "integer"
+                  },
+                  "project_id": {
+                    "default": "",
+                    "description": "Project id from fab_create_project. Pair with part_name.",
+                    "title": "Project Id",
+                    "type": "string"
+                  },
+                  "queue_only": {
+                    "default": false,
+                    "description": "Farm Manager only: send task_print_model 0 so the task is queued. On LAN this refuses to upload, because project_file starts the job.",
+                    "title": "Queue Only",
+                    "type": "boolean"
+                  },
+                  "timelapse": {
+                    "default": false,
+                    "description": "Record a timelapse.",
+                    "title": "Timelapse",
+                    "type": "boolean"
+                  },
+                  "transport": {
+                    "default": "",
+                    "description": "lan or farm. Empty uses LAN when BAMBU_LAN_HOST is set, otherwise Farm Manager.",
+                    "title": "Transport",
+                    "type": "string"
+                  },
+                  "use_ams": {
+                    "default": false,
+                    "description": "Ask the printer to use the AMS. Default false uses the external spool.",
+                    "title": "Use Ams",
+                    "type": "boolean"
+                  },
+                  "vibration_cali": {
+                    "default": true,
+                    "description": "Run vibration calibration. Meaningful on the X1 Carbon.",
+                    "title": "Vibration Cali",
+                    "type": "boolean"
+                  }
+                },
+                "title": "fab_bambu_push_3mfArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "MCP tool result. printer_dispatched is true only after a sliced job is accepted."
+          }
+        },
+        "summary": "fab_bambu_push_3mf"
+      }
+    },
+    "/tools/fab_bambu_status": {
+      "post": {
+        "description": "Read nozzle temperature, bed temperature, and job progress.\n\n    LAN uses a read-only MQTT pushall. Farm Manager reads the device report from\n    GET /devices. This tool does not upload a file and does not queue a job.\n    printer_dispatched stays false. Credentials come from the process environment.\n    ",
+        "operationId": "fab_bambu_status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "device_id": {
+                    "default": "",
+                    "description": "Farm Manager dev_id when more than one printer is listed. Ignored on LAN.",
+                    "title": "Device Id",
+                    "type": "string"
+                  },
+                  "transport": {
+                    "default": "",
+                    "description": "lan or farm. Empty uses LAN when BAMBU_LAN_HOST is set, otherwise Farm Manager.",
+                    "title": "Transport",
+                    "type": "string"
+                  }
+                },
+                "title": "fab_bambu_statusArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "MCP tool result. printer_dispatched is true only after a sliced job is accepted."
+          }
+        },
+        "summary": "fab_bambu_status"
+      }
+    },
     "/tools/fab_bom_sketch": {
       "post": {
         "description": "Rough filament mass and fastener guesses from part metadata. Not a quote.",
@@ -191,50 +428,6 @@
           }
         },
         "summary": "fab_dfm_check"
-      }
-    },
-    "/tools/fab_discover_printers": {
-      "post": {
-        "description": "Find a Bambu printer on the LAN or on a configured Farm Manager server.\n\n    Does not upload a file and does not start a print. A configured BAMBU_LAN_HOST\n    is probed with the printer TCP 3000 detect frame. LAN Developer Mode is the\n    print path this server implements. Farm Manager is optional. The cloud API is not used.\n    ",
-        "operationId": "fab_discover_printers",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "ssdp": {
-                    "default": false,
-                    "description": "Send an SSDP M-SEARCH on UDP 2021 and 1990. Default false. BAMBU_DISCOVER_SSDP=1 also turns the scan on.",
-                    "title": "Ssdp",
-                    "type": "boolean"
-                  },
-                  "transport": {
-                    "default": "",
-                    "description": "lan, farm, or both. Empty uses whichever of LAN and Farm Manager is configured.",
-                    "title": "Transport",
-                    "type": "string"
-                  }
-                },
-                "title": "fab_discover_printersArguments",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ToolResult"
-                }
-              }
-            },
-            "description": "MCP tool result. printer_dispatched is true only after a sliced job is accepted."
-          }
-        },
-        "summary": "fab_discover_printers"
       }
     },
     "/tools/fab_export_3mf": {
@@ -456,149 +649,6 @@
           }
         },
         "summary": "fab_param_model"
-      }
-    },
-    "/tools/fab_queue_print": {
-      "post": {
-        "description": "Queue a sliced .gcode.3mf to a Bambu X1 Carbon, or hand an unsliced STL/3MF to Bambu Studio.\n\n    LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the print path. Farm Manager\n    is used when transport is farm, or when BAMBU_FARM_URL is set and no LAN host is configured.\n    Geometry-only STL and 3MF files are not sent. The tool writes a Studio handoff and X1 Carbon\n    profile notes. confirm true and BAMBU_PRINT_ENABLED=1 are both required before a job is sent.\n    Firearm and other weapon-part requests are refused. Training-tool and general fab jobs are in scope.\n    Credentials come from the process environment, not from the repo.\n    ",
-        "operationId": "fab_queue_print",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "ams_slot": {
-                    "anyOf": [
-                      {
-                        "type": "integer"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "default": null,
-                    "description": "AMS tray index 0-15 when use_ams is true. Null lets the printer or farm match.",
-                    "title": "Ams Slot"
-                  },
-                  "bed_leveling": {
-                    "default": true,
-                    "description": "Run bed leveling with the job.",
-                    "title": "Bed Leveling",
-                    "type": "boolean"
-                  },
-                  "bed_type": {
-                    "default": "auto",
-                    "description": "auto, hot_plate, textured_plate, cool_plate, or engineering_plate.",
-                    "title": "Bed Type",
-                    "type": "string"
-                  },
-                  "confirm": {
-                    "default": false,
-                    "description": "True sends a sliced job. False returns a plan. Also requires BAMBU_PRINT_ENABLED=1.",
-                    "title": "Confirm",
-                    "type": "boolean"
-                  },
-                  "device_id": {
-                    "default": "",
-                    "description": "Farm Manager dev_id when more than one printer is listed. Ignored on LAN.",
-                    "title": "Device Id",
-                    "type": "string"
-                  },
-                  "file_path": {
-                    "default": "",
-                    "description": "Optional .stl, .3mf, or sliced .gcode.3mf under the part directory, the project directory, or FAB_EXPORT_ROOTS. Empty uses model.gcode.3mf, then model.3mf, then model.stl.",
-                    "title": "File Path",
-                    "type": "string"
-                  },
-                  "flow_cali": {
-                    "default": true,
-                    "description": "Run flow calibration with the job.",
-                    "title": "Flow Cali",
-                    "type": "boolean"
-                  },
-                  "intent": {
-                    "default": "",
-                    "description": "What this original training-tool or fab part is. Weapon-part requests are refused.",
-                    "title": "Intent",
-                    "type": "string"
-                  },
-                  "material": {
-                    "default": "",
-                    "description": "PETG, ASA, TPU, PA, or PA-CF. Empty uses the part material. Notes are not a slicer profile.",
-                    "title": "Material",
-                    "type": "string"
-                  },
-                  "part_name": {
-                    "default": "",
-                    "description": "Part name or slug. Pair with project_id.",
-                    "title": "Part Name",
-                    "type": "string"
-                  },
-                  "plate": {
-                    "default": 1,
-                    "description": "Plate number inside the sliced 3MF. Default 1.",
-                    "maximum": 16,
-                    "minimum": 1,
-                    "title": "Plate",
-                    "type": "integer"
-                  },
-                  "project_id": {
-                    "default": "",
-                    "description": "Project id from fab_create_project. Pair with part_name.",
-                    "title": "Project Id",
-                    "type": "string"
-                  },
-                  "queue_only": {
-                    "default": false,
-                    "description": "Farm Manager only: send task_print_model 0 so the task is queued. On LAN this refuses to upload, because project_file starts the job.",
-                    "title": "Queue Only",
-                    "type": "boolean"
-                  },
-                  "timelapse": {
-                    "default": false,
-                    "description": "Record a timelapse.",
-                    "title": "Timelapse",
-                    "type": "boolean"
-                  },
-                  "transport": {
-                    "default": "",
-                    "description": "lan or farm. Empty uses LAN when BAMBU_LAN_HOST is set, otherwise Farm Manager.",
-                    "title": "Transport",
-                    "type": "string"
-                  },
-                  "use_ams": {
-                    "default": false,
-                    "description": "Ask the printer to use the AMS. Default false uses the external spool.",
-                    "title": "Use Ams",
-                    "type": "boolean"
-                  },
-                  "vibration_cali": {
-                    "default": true,
-                    "description": "Run vibration calibration. Meaningful on the X1 Carbon.",
-                    "title": "Vibration Cali",
-                    "type": "boolean"
-                  }
-                },
-                "title": "fab_queue_printArguments",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ToolResult"
-                }
-              }
-            },
-            "description": "MCP tool result. printer_dispatched is true only after a sliced job is accepted."
-          }
-        },
-        "summary": "fab_queue_print"
       }
     },
     "/tools/fab_x1c_profile_notes": {

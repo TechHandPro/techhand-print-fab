@@ -8,11 +8,14 @@ import threading
 
 from techhand_print_fab.bambu_frames import (
     build_project_file,
+    build_pushall,
     encode_detect,
     is_x1c,
     parse_detect,
     parse_ssdp,
     safe_remote_name,
+    status_snapshot,
+    summarize_ams,
 )
 from techhand_print_fab.bambu_mqtt import (
     MqttSession,
@@ -184,3 +187,96 @@ def test_mqtt_session_round_trip_hides_nothing_but_returns_the_ack() -> None:
     assert ack["result"] == "success"
     assert encode_connect("id", "bblp", ACCESS)
     assert encode_subscribe("device/00M09A123456789/report")
+
+
+def test_pushall_snapshot_keeps_ams_and_ignores_a_job_ack() -> None:
+    payload = build_pushall("9")
+    assert payload["pushing"]["command"] == "pushall"
+    assert "print" not in payload
+    assert summarize_ams(None) is None
+    assert summarize_ams({"ams_exist_bits": "0", "ams": []}) == {"present": False, "trays": []}
+    snapshot = status_snapshot(
+        {
+            "command": "push_status",
+            "nozzle_temper": 215,
+            "nozzle_target_temper": "220",
+            "bed_temper": 60.5,
+            "bed_target_temper": 65,
+            "gcode_state": "RUNNING",
+            "mc_percent": 12,
+            "mc_remaining_time": 40,
+            "layer_num": 3,
+            "total_layer_num": 20,
+            "subtask_name": "plate",
+            "ams": {
+                "ams_exist_bits": "1",
+                "ams": [{"id": "0", "tray": [{"id": "0", "tray_type": "PETG", "tray_color": "FF0000FF", "remain": 80}]}],
+            },
+        }
+    )
+    assert snapshot["nozzle_c"] == 215.0
+    assert snapshot["bed_c"] == 60.5
+    assert snapshot["state"] == "RUNNING"
+    assert snapshot["progress_percent"] == 12.0
+    assert snapshot["ams"]["trays"][0]["type"] == "PETG"
+
+    client_sock, server_sock = socket.socketpair()
+    client_sock.settimeout(3)
+    server_sock.settimeout(3)
+    errors: list[BaseException] = []
+
+    def serve() -> None:
+        try:
+            stream = SocketStream(server_sock)
+            packet_type, _flags, _body = read_packet(stream.recv_exact)
+            assert packet_type == 1
+            stream.sendall(bytes([0x20, 0x02, 0x00, 0x00]))
+            sub_type, _sub_flags, _sub_body = read_packet(stream.recv_exact)
+            assert sub_type == 8
+            stream.sendall(bytes([0x90, 0x03, 0x00, 0x01, 0x00]))
+            pub_type, pub_flags, pub_body = read_packet(stream.recv_exact)
+            assert pub_type == 3
+            _topic, raw = parse_publish(pub_flags, pub_body)
+            message = json.loads(raw)
+            assert message["pushing"]["command"] == "pushall"
+            ack = json.dumps({"print": {"sequence_id": "9", "result": "success"}}).encode("utf-8")
+            stream.sendall(encode_publish("device/00M09A123456789/report", ack))
+            report = json.dumps(
+                {
+                    "print": {
+                        "command": "push_status",
+                        "sequence_id": "9",
+                        "gcode_state": "IDLE",
+                        "nozzle_temper": 25,
+                        "bed_temper": 24,
+                        "mc_percent": 0,
+                    }
+                }
+            ).encode("utf-8")
+            stream.sendall(encode_publish("device/00M09A123456789/report", report))
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        session = MqttSession(SocketStream(client_sock))
+        body = session.collect(
+            client_id="techhand-fab-test",
+            username="bblp",
+            password=ACCESS,
+            report_topic="device/00M09A123456789/report",
+            request_topic="device/00M09A123456789/request",
+            payload=payload,
+            timeout_s=3,
+            timeout_message="status timeout",
+            accept=lambda item: "gcode_state" in item or "nozzle_temper" in item,
+        )
+    finally:
+        thread.join(timeout=3)
+        client_sock.close()
+        server_sock.close()
+    assert errors == []
+    assert body["gcode_state"] == "IDLE"
+    assert body["nozzle_temper"] == 25
+    assert "result" not in body

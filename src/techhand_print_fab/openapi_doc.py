@@ -55,8 +55,9 @@ def build_openapi(server: MCPServer) -> dict[str, Any]:
                 "Tool contract for the techhand-print-fab MCP server. "
                 "Clients speak MCP on stdio or Streamable HTTP at /mcp. "
                 "These paths are not served as REST. "
-                "Design tools stay dry-fire. fab_queue_print dispatches a sliced .gcode.3mf "
-                "only when confirm is true and BAMBU_PRINT_ENABLED=1. "
+                "Design tools stay dry-fire. fab_bambu_push_3mf dispatches a sliced .gcode.3mf "
+                "only when dry_run is false, confirm is true, and BAMBU_PRINT_ENABLED=1. "
+                "printer_dispatched is true only after the job is accepted. "
                 "LAN Developer Mode is the print path. Credentials are environment variables, never this file."
             ),
         },

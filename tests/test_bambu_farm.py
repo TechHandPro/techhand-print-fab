@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from techhand_print_fab.bambu_config import BambuError
-from techhand_print_fab.print_job import send_farm
+from techhand_print_fab.print_job import read_printer_status, send_farm
 from tests.bambu_support import make_config
 
 PASSWORD = "farm-secret-value"
@@ -94,6 +94,36 @@ def _stop(server: _FarmServer, thread: threading.Thread) -> None:
     server.shutdown()
     server.server_close()
     thread.join(timeout=3)
+
+
+def test_farm_status_reads_the_device_report_and_does_not_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    server, thread = _serve()
+    server.devices[0]["report_status"] = {
+        "gcode_state": "RUNNING",
+        "nozzle_temper": 200,
+        "bed_temper": 55,
+        "mc_percent": 10,
+        "ams": {
+            "ams_exist_bits": "1",
+            "ams": [{"id": "0", "tray": [{"id": "1", "tray_type": "PETG"}]}],
+        },
+    }
+    monkeypatch.setenv("BAMBU_FARM_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.setenv("BAMBU_FARM_TOKEN", TOKEN)
+    try:
+        result = read_printer_status(transport="farm")
+    finally:
+        _stop(server, thread)
+    assert result["ok"] is True
+    assert result["mode"] == "status"
+    assert result["printer_dispatched"] is False
+    assert result["state"] == "RUNNING"
+    assert result["nozzle_c"] == 200.0
+    assert result["bed_c"] == 55.0
+    assert result["progress_percent"] == 10.0
+    assert result["ams"]["trays"][0]["type"] == "PETG"
+    assert TOKEN not in json.dumps(result)
+    assert "/task" not in [hit[1] for hit in server.hits]
 
 
 def test_farm_login_upload_and_direct_print() -> None:

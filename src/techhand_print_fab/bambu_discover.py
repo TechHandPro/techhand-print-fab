@@ -9,6 +9,7 @@ from typing import Any, Callable
 from techhand_print_fab.bambu_config import BambuConfig, BambuError, assert_private_host, load_config
 from techhand_print_fab.bambu_farm import FarmClient
 from techhand_print_fab.bambu_frames import encode_detect, is_x1c, parse_detect, parse_ssdp
+from techhand_print_fab.bambu_status import fetch_lan_status
 from techhand_print_fab.results import print_result
 
 LAN_PATH_WHY = (
@@ -30,6 +31,7 @@ _SSDP = (
 Probe = Callable[[str], "DetectInfo"]
 SsdpListen = Callable[[], list[bytes]]
 FarmList = Callable[[BambuConfig], list[dict[str, Any]]]
+StatusLookup = Callable[[BambuConfig, str, str], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,7 @@ def discover_printers(
     probe: Probe | None = None,
     ssdp_listen: SsdpListen | None = None,
     farm_list: FarmList | None = None,
+    status_lookup: StatusLookup | None = None,
 ) -> dict[str, Any]:
     loaded = config or load_config()
     choice = (transport or "").strip().lower()
@@ -112,16 +115,15 @@ def discover_printers(
         name = info.name
         serial = info.serial or loaded.serial
         printers.append(
-            {
-                "source": "lan",
-                "serial": serial,
-                "host": loaded.lan_host,
-                "model": model,
-                "name": name,
-                "x1c": is_x1c(model, name),
-                "reachable": info.ok,
-                "detail": info.detail,
-            }
+            _identity(
+                source="lan",
+                serial=serial,
+                host=loaded.lan_host,
+                model=model,
+                name=name,
+                reachable=info.ok,
+                detail=info.detail,
+            )
         )
     if want_lan and (ssdp or loaded.discover_ssdp):
         ssdp_state = "ran"
@@ -130,16 +132,15 @@ def discover_printers(
             if parsed is None:
                 continue
             printers.append(
-                {
-                    "source": "ssdp",
-                    "serial": parsed["serial"],
-                    "host": parsed["host"],
-                    "model": parsed["model"],
-                    "name": parsed["name"],
-                    "x1c": is_x1c(parsed["model"], parsed["name"]),
-                    "reachable": True,
-                    "detail": "ssdp",
-                }
+                _identity(
+                    source="ssdp",
+                    serial=parsed["serial"],
+                    host=parsed["host"],
+                    model=parsed["model"],
+                    name=parsed["name"],
+                    reachable=True,
+                    detail="ssdp",
+                )
             )
     if want_farm and loaded.farm_url:
         try:
@@ -147,8 +148,12 @@ def discover_printers(
         except BambuError as exc:
             farm_error = str(exc)
             devices = []
-        printers.extend(devices)
+        printers.extend(_identity_from_farm(device) for device in devices)
     printers = _dedupe(printers)
+    lookup = status_lookup or fetch_lan_status
+    for printer in printers:
+        if printer.get("source") in {"lan", "ssdp"}:
+            _attach_lan_status(loaded, printer, lookup)
     recommended = ""
     if any(item["source"] in {"lan", "ssdp"} for item in printers):
         recommended = "lan"
@@ -180,6 +185,57 @@ def discover_printers(
         ssdp=ssdp_state,
         farm_error=farm_error,
     )
+
+
+def _identity(
+    *,
+    source: str,
+    serial: str,
+    host: str,
+    model: str,
+    name: str,
+    reachable: bool,
+    detail: str,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "serial": serial,
+        "host": host,
+        "model": model,
+        "name": name,
+        "state": "",
+        "ams": None,
+        "x1c": is_x1c(model, name),
+        "reachable": reachable,
+        "detail": detail,
+    }
+
+
+def _identity_from_farm(device: dict[str, Any]) -> dict[str, Any]:
+    device.setdefault("host", "")
+    device.setdefault("model", "")
+    device.setdefault("state", str(device.get("gcode_state") or ""))
+    device.setdefault("ams", None)
+    return device
+
+
+def _attach_lan_status(config: BambuConfig, printer: dict[str, Any], lookup: StatusLookup) -> None:
+    """Fill state and AMS from MQTT when this printer matches the configured access code."""
+    if not config.access_code:
+        return
+    serial = str(printer.get("serial") or "")
+    host = str(printer.get("host") or "")
+    if not host or not serial or not printer.get("reachable"):
+        return
+    if config.serial and serial != config.serial:
+        return
+    try:
+        snapshot = lookup(config, host, serial)
+    except BambuError as exc:
+        printer["status_error"] = str(exc)
+        return
+    printer["state"] = str(snapshot.get("state") or "")
+    printer["ams"] = snapshot.get("ams")
 
 
 def _default_probe(config: BambuConfig) -> Probe:

@@ -67,6 +67,9 @@ def test_discover_uses_lan_probe_and_skips_ssdp() -> None:
     assert result["recommended_transport"] == "lan"
     assert result["printers"][0]["x1c"] is True
     assert result["printers"][0]["host"] == "192.168.1.50"
+    assert result["printers"][0]["model"] == "BL-P001"
+    assert result["printers"][0]["state"] == ""
+    assert result["printers"][0]["ams"] is None
 
 
 def test_discover_merges_ssdp_and_reports_farm_errors() -> None:
@@ -94,6 +97,43 @@ def test_discover_merges_ssdp_and_reports_farm_errors() -> None:
     assert result["printers"][0]["source"] == "ssdp"
     assert result["printers"][0]["x1c"] is True
     assert result["recommended_transport"] == "lan"
+
+
+def test_discover_attaches_state_and_ams_from_a_read_only_lookup() -> None:
+    def lookup(config: object, host: str, serial: str) -> dict[str, object]:
+        assert host == "192.168.1.50"
+        assert serial == "00M09A123456789"
+        assert config.access_code == "99887766"  # type: ignore[attr-defined]
+        return {"state": "IDLE", "ams": {"present": True, "trays": [{"slot": "0", "type": "PETG"}]}}
+
+    result = discover_printers(
+        config=make_config(lan_host="192.168.1.50", serial="00M09A123456789", access_code="99887766"),
+        probe=lambda host: DetectInfo(True, "00M09A123456789", "BL-P001", "X1C", "detect"),
+        status_lookup=lookup,
+    )
+    printer = result["printers"][0]
+    assert printer["host"] == "192.168.1.50"
+    assert printer["model"] == "BL-P001"
+    assert printer["state"] == "IDLE"
+    assert printer["ams"]["present"] is True
+    assert result["printer_dispatched"] is False
+
+
+def test_status_lookup_failure_keeps_the_printer() -> None:
+    def lookup(_config: object, _host: str, _serial: str) -> dict[str, object]:
+        raise BambuError("status timeout")
+
+    result = discover_printers(
+        config=make_config(lan_host="192.168.1.50", serial="00M09A123456789", access_code="99887766"),
+        probe=lambda host: DetectInfo(True, "00M09A123456789", "BL-P001", "X1C", "detect"),
+        status_lookup=lookup,
+    )
+    printer = result["printers"][0]
+    assert result["ok"] is True
+    assert printer["state"] == ""
+    assert printer["ams"] is None
+    assert printer["status_error"] == "status timeout"
+    assert result["printer_dispatched"] is False
 
 
 def test_public_lan_host_is_rejected_before_a_probe() -> None:

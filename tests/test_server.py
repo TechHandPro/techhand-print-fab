@@ -23,8 +23,9 @@ CORE_TOOLS = {
     "fab_dfm_check",
     "fab_x1c_profile_notes",
     "fab_bom_sketch",
-    "fab_discover_printers",
-    "fab_queue_print",
+    "fab_bambu_discover",
+    "fab_bambu_status",
+    "fab_bambu_push_3mf",
 }
 
 REQUIRED = {
@@ -36,8 +37,9 @@ REQUIRED = {
     "fab_dfm_check": {"project_id", "part_name"},
     "fab_x1c_profile_notes": {"material"},
     "fab_bom_sketch": {"project_id", "part_name"},
-    "fab_discover_printers": set(),
-    "fab_queue_print": set(),
+    "fab_bambu_discover": set(),
+    "fab_bambu_status": set(),
+    "fab_bambu_push_3mf": set(),
 }
 
 

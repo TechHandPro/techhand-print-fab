@@ -15,7 +15,10 @@ OpenSCAD is the primary model. A CadQuery script can be written next to it and i
 Refuse requests to make a 1:1 copy of a proprietary commercial product.
 Refuse firearm and other weapon-part print requests. Training-tool and general fab jobs are in scope.
 Design exports are files on disk. Mesh export is dry-fire training output.
-fab_queue_print sends a sliced .gcode.3mf only when confirm is true and BAMBU_PRINT_ENABLED=1.
+fab_bambu_discover lists host, model, state, and AMS when the printer exposes it.
+fab_bambu_status reads nozzle, bed, and job progress and does not queue a job.
+fab_bambu_push_3mf defaults to dry-run. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.
+printer_dispatched is true only after the printer or Farm Manager accepts the job.
 An unsliced STL or 3MF is a Bambu Studio handoff with X1 Carbon profile notes, and no printer job.
 LAN Developer Mode is the print path. Farm Manager is optional. The cloud API is not used.
 Ticket attach is absent unless the separate TNT extra is installed and TECHHAND_FAB_ENABLE_TNT=1.

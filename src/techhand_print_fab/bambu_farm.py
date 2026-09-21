@@ -17,7 +17,7 @@ from typing import Any
 from urllib import error, request
 
 from techhand_print_fab.bambu_config import BambuConfig, BambuError, farm_origin, scrub
-from techhand_print_fab.bambu_frames import is_x1c
+from techhand_print_fab.bambu_frames import is_x1c, status_snapshot, summarize_ams
 
 _MAX_BODY = 2_000_000
 Opener = Callable[[request.Request, float], bytes]
@@ -46,6 +46,8 @@ class FarmClient:
             model = str(item.get("dev_model") or "")
             name = str(item.get("name") or item.get("dev_name") or "")
             report = item.get("report_status") if isinstance(item.get("report_status"), dict) else {}
+            ams_raw = report.get("ams") if "ams" in report else item.get("ams")
+            snapshot = status_snapshot(report)
             found.append(
                 {
                     "source": "farm",
@@ -53,7 +55,18 @@ class FarmClient:
                     "host": str(item.get("dev_ip") or ""),
                     "model": model,
                     "name": name,
-                    "gcode_state": str(report.get("gcode_state") or ""),
+                    "state": snapshot["state"],
+                    "gcode_state": snapshot["state"],
+                    "ams": summarize_ams(ams_raw),
+                    "nozzle_c": snapshot["nozzle_c"],
+                    "nozzle_target_c": snapshot["nozzle_target_c"],
+                    "bed_c": snapshot["bed_c"],
+                    "bed_target_c": snapshot["bed_target_c"],
+                    "progress_percent": snapshot["progress_percent"],
+                    "remaining_minutes": snapshot["remaining_minutes"],
+                    "layer": snapshot["layer"],
+                    "total_layers": snapshot["total_layers"],
+                    "job_name": snapshot["job_name"],
                     "x1c": is_x1c(model, name),
                     "reachable": True,
                 }
