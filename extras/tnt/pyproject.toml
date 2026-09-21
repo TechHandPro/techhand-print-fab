@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "techhand-print-fab-tnt"
+version = "0.1.0"
+description = "Optional TNT ticket-attach bridge for techhand-print-fab. Not required to design or export."
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "TechHand Pro Solutions" }]
+dependencies = ["techhand-print-fab>=0.1.0,<0.2"]
+
+[project.entry-points."techhand_print_fab.bridges"]
+tnt = "techhand_print_fab_tnt:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
