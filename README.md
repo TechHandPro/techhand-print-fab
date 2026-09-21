@@ -14,7 +14,7 @@ python3 -m pip install -e .
 
 That installs the `techhand-print-fab` command and pins `mcp` to the 2.x line (`requirements.txt`). Use `python3 -m pip install -e ".[dev]"` when you also want pytest (`requirements-dev.txt`).
 
-OpenSCAD is optional. When `openscad` is on `PATH` (or `OPENSCAD_BIN` points at it), STL/3MF export shells out to it. Without it, box, plate, mount plate, cylinder, tube, and L-bracket still export from a built-in mesh. Boolean holes and corner radii stay in the `.scad` file until OpenSCAD runs. `custom_scad` needs OpenSCAD to mesh.
+OpenSCAD is optional for the built-in kinds (box, plate, mount plate, cylinder, tube, L-bracket). When `openscad` is on `PATH`, or `OPENSCAD_BIN` points at it, STL/3MF export shells out to it and boolean holes are in the mesh. Without it, those kinds still export from a built-in mesh. The bundled trainer grip files are `custom_scad` and need OpenSCAD to mesh. See the dogfood section.
 
 CadQuery is not a dependency. `model.py` is a script for a machine that has CadQuery.
 
@@ -126,7 +126,7 @@ Example (`examples/l-bracket.params.json`):
 }
 ```
 
-`custom_scad` takes `scad_body` or `source_path`. `source_path` must be a `.scad` file or a directory of them under the project folder or `FAB_IMPORT_ROOTS` (`os.pathsep`-separated). A directory becomes one part per file, named `{part_name}-{relative-stem}`, up to 50 files. OpenSCAD `include`, `use`, and `import()` are rejected so a prompt cannot pull in arbitrary files.
+`custom_scad` takes `scad_body` or `source_path`. `source_path` may be `cad-v0` (the bundled trainer grip) or a `.scad` file or directory under the project folder or `FAB_IMPORT_ROOTS` (`os.pathsep`-separated). A directory becomes one part per file, named `{part_name}-{relative-stem}`, up to 50 files. A relative `include <file.scad>` inside that directory is inlined. Absolute includes, `../`, `use`, and `import()` are rejected.
 
 Call shape:
 
@@ -136,6 +136,33 @@ Call shape:
 4. `fab_dfm_check`, `fab_x1c_profile_notes`, `fab_bom_sketch` as needed.
 
 `output_path` on export must stay inside the part directory or `FAB_EXPORT_ROOTS`.
+
+## PRINT dogfood: trainer grip CAD v0
+
+Bundled at `src/techhand_print_fab/cad_v0/` and installed with the package. Training grip block only. `source_path` `cad-v0` needs no `FAB_IMPORT_ROOTS` entry.
+
+| File | Slug when `part_name` is `trainer` |
+| --- | --- |
+| `grip_shell.scad` | `trainer-grip-shell` |
+| `grip_shell_left.scad` | `trainer-grip-shell-left` |
+| `grip_shell_right.scad` | `trainer-grip-shell-right` |
+| `backstrap_insert.scad` | `trainer-backstrap-insert` |
+| `laser_clamp.scad` | `trainer-laser-clamp` |
+| `spring_seat.scad` | `trainer-spring-seat` |
+| `trigger_lever.scad` | `trainer-trigger-lever` |
+| `assembly_preview.scad` | `trainer-assembly-preview` |
+
+Left and right shells `include <grip_shell.scad>`. The import step inlines that file. `assembly_preview.scad` is a pose stub (`import_grip` is not a module in this set) and is not the STL target.
+
+1. `fab_create_project` with `name` `Trainer grip v0` and a short description of the original trainer block.
+2. `fab_param_model` with that `project_id`, `part_name` `trainer`, `source_path` `cad-v0`, and `params` `{"material": "PETG"}`.
+3. `fab_list_parts` returns the eight slugs above.
+4. `fab_dfm_check` on `trainer-grip-shell`. Header numbers are read from the file: wall about 2.4 mm, clearance 0.25 mm, box 110 × 32 × 120 mm. `fab_dfm_check` on `trainer-laser-clamp` warns on the 0.15 mm diametral clearance.
+5. `fab_export_stl` on `trainer-grip-shell`.
+
+Step 5 needs OpenSCAD. These parts are not a built-in primitive. The server still writes `model.scad`. If `openscad` is missing, the tool returns an error that names OpenSCAD and does not report a mesh or a printer job. Install OpenSCAD, or set `OPENSCAD_BIN`, and call `fab_export_stl` again. `fab_export_3mf` is the same gate. Box, plate, and the other primitive kinds export without OpenSCAD.
+
+Prefer Push stays held. Ticket attach stays the optional `extras/tnt` package.
 
 ## Guardrails
 

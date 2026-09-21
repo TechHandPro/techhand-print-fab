@@ -6,8 +6,17 @@ import os
 from pathlib import Path
 
 
+def bundled_cad_v0() -> Path:
+    """Trainer grip CAD shipped with this package. source_path cad-v0 maps here."""
+    return Path(__file__).resolve().parent / "cad_v0"
+
+
 def import_roots(extra: list[Path] | None = None) -> list[Path]:
-    roots = list(extra or [])
+    roots: list[Path] = []
+    bundle = bundled_cad_v0()
+    if bundle.is_dir():
+        roots.append(bundle)
+    roots.extend(extra or [])
     raw = os.environ.get("FAB_IMPORT_ROOTS", "")
     if raw.strip():
         for piece in raw.split(os.pathsep):

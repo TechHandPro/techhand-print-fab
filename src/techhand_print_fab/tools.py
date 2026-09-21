@@ -15,11 +15,12 @@ from techhand_print_fab.cadquery_gen import render_cadquery
 from techhand_print_fab.dfm import dfm_report
 from techhand_print_fab.exporting import ExportError, build_mesh, write_mesh_file
 from techhand_print_fab.openscad_gen import render_openscad
-from techhand_print_fab.paths import export_roots, import_roots, resolve_under
+from techhand_print_fab.paths import bundled_cad_v0, export_roots, import_roots, resolve_under
 from techhand_print_fab.policy import screen
 from techhand_print_fab.profiles import canonical_material, profile_notes
 from techhand_print_fab.results import failure, ok
-from techhand_print_fab.spec import MAX_SCAD_CHARS, SpecError, assert_scad_closed, normalize
+from techhand_print_fab.scad_source import load_scad_tree_file, scad_parameter_hints
+from techhand_print_fab.spec import SpecError, normalize
 from techhand_print_fab.store import StoreError, get_store, slugify, spec_to_dict, utc_now
 
 _WRITE = ToolAnnotations(
@@ -130,8 +131,10 @@ def fab_param_model(
         str,
         Field(
             description=(
-                "Optional .scad file or directory to ingest. Must sit under the project "
-                "directory or FAB_IMPORT_ROOTS. include/use/import() are rejected."
+                "Optional .scad file or directory to ingest. Use cad-v0 for the bundled "
+                "trainer grip set. Other paths must sit under the project directory or "
+                "FAB_IMPORT_ROOTS. Relative include <> inside that root is inlined. "
+                "Absolute includes, ../, use, and import() are rejected."
             )
         ),
     ] = "",
@@ -378,7 +381,7 @@ def _load_sources(store: Any, project_id: str, source_path: str) -> list[tuple[s
     if located is None or not located.exists():
         raise SpecError("source_path is outside the project directory and FAB_IMPORT_ROOTS")
     if located.is_file():
-        return [(located.stem, _read_scad(located))]
+        return [(located.stem, _read_scad(located, roots))]
     if not located.is_dir():
         raise SpecError("source_path is not a .scad file or directory")
     files = sorted(path for path in located.rglob("*.scad") if path.is_file())
@@ -392,11 +395,16 @@ def _load_sources(store: Any, project_id: str, source_path: str) -> list[tuple[s
         if resolved is None:
             raise SpecError("a .scad path escaped the import roots")
         relative = resolved.relative_to(located.resolve()).with_suffix("")
-        loaded.append((relative.as_posix().replace("/", "-"), _read_scad(resolved)))
+        loaded.append((relative.as_posix().replace("/", "-"), _read_scad(resolved, roots)))
     return loaded
 
 
 def _locate(source_path: str, roots: list[Path]) -> Path | None:
+    token = source_path.strip().replace("\\", "/").strip("/")
+    if token in {"cad-v0", "cad_v0"}:
+        bundle = bundled_cad_v0()
+        if bundle.is_dir():
+            return bundle
     candidate = Path(source_path).expanduser()
     options = [candidate] if candidate.is_absolute() else [Path.cwd() / candidate]
     if not candidate.is_absolute():
@@ -408,14 +416,8 @@ def _locate(source_path: str, roots: list[Path]) -> Path | None:
     return None
 
 
-def _read_scad(path: Path) -> str:
-    if path.suffix.lower() != ".scad":
-        raise SpecError("source_path files must end in .scad")
-    if path.stat().st_size > MAX_SCAD_CHARS:
-        raise SpecError("OpenSCAD source is too large")
-    text = path.read_text(encoding="utf-8")
-    assert_scad_closed(text)
-    return text
+def _read_scad(path: Path, roots: list[Path]) -> str:
+    return load_scad_tree_file(path, roots)
 
 
 def _jobs(
@@ -428,18 +430,22 @@ def _jobs(
         return [(slug, part_name.strip(), dict(params))]
     if len(sources) == 1:
         _stem, text = sources[0]
-        job = dict(params)
-        job["kind"] = "custom_scad"
-        job["scad_body"] = text
-        return [(slug, part_name.strip(), job)]
+        return [(slug, part_name.strip(), _scad_job(params, text))]
     jobs: list[tuple[str, str, dict[str, Any]]] = []
     for stem, text in sources:
-        job = dict(params)
-        job["kind"] = "custom_scad"
-        job["scad_body"] = text
         name = f"{part_name.strip()}-{stem}" if part_name.strip() else stem
-        jobs.append((slugify(name), name, job))
+        jobs.append((slugify(name), name, _scad_job(params, text)))
     return jobs
+
+
+def _scad_job(params: dict[str, Any], text: str) -> dict[str, Any]:
+    job = dict(params)
+    job["kind"] = "custom_scad"
+    job["scad_body"] = text
+    for key, value in scad_parameter_hints(text).items():
+        if job.get(key) in (None, ""):
+            job[key] = value
+    return job
 
 
 def _write_part(

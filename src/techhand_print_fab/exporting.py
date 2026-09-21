@@ -47,8 +47,9 @@ def build_mesh(spec: ModelSpec, scad_path: Path) -> BuiltMesh:
         warning = f"OpenSCAD failed ({detail}). "
     if spec.kind == "custom_scad":
         raise ExportError(
-            "custom_scad needs OpenSCAD on PATH to export a mesh. "
-            "The .scad file is saved. No printer job was started."
+            "This part is custom OpenSCAD, including the bundled trainer grip set. "
+            "Install OpenSCAD and put openscad on PATH, or set OPENSCAD_BIN, to export STL/3MF. "
+            "The .scad file is already saved. No printer job was started."
         )
     try:
         mesh = mesh_from_spec(spec)

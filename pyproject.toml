@@ -28,7 +28,7 @@ Repository = "https://github.com/TechHandPro/techhand-print-fab"
 where = ["src"]
 
 [tool.setuptools.package-data]
-techhand_print_fab = ["py.typed"]
+techhand_print_fab = ["py.typed", "cad_v0/*.scad"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

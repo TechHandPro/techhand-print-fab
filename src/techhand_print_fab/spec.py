@@ -272,6 +272,8 @@ def bounding_box_mm(spec: ModelSpec) -> tuple[float, float, float] | None:
         case "cylinder" | "tube":
             return (spec.outer_diameter_mm, spec.outer_diameter_mm, spec.height_mm)
         case "custom_scad":
+            if spec.length_mm > 0 and spec.width_mm > 0 and spec.height_mm > 0:
+                return (spec.length_mm, spec.width_mm, spec.height_mm)
             return None
         case _ as unhandled:
             _never(unhandled)
