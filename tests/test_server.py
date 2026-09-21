@@ -25,6 +25,7 @@ CORE_TOOLS = {
     "fab_bom_sketch",
     "fab_bambu_discover",
     "fab_bambu_status",
+    "fab_slice",
     "fab_bambu_push_3mf",
 }
 
@@ -39,6 +40,7 @@ REQUIRED = {
     "fab_bom_sketch": {"project_id", "part_name"},
     "fab_bambu_discover": set(),
     "fab_bambu_status": set(),
+    "fab_slice": set(),
     "fab_bambu_push_3mf": set(),
 }
 
@@ -55,6 +57,10 @@ def test_tool_schemas_and_instructions(server) -> None:
     assert "dry-fire" in INSTRUCTIONS.lower()
     assert "developer mode" in INSTRUCTIONS.lower()
     assert "weapon" in INSTRUCTIONS.lower()
+    assert "fab_slice" in INSTRUCTIONS
+    assert "textured_plate" in INSTRUCTIONS
+    assert "0.4" in INSTRUCTIONS
+    assert "PLA" in INSTRUCTIONS
     assert server.instructions == INSTRUCTIONS
 
 

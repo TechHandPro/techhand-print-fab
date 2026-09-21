@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+DEFAULT_MATERIAL = "PLA"
+DEFAULT_BED_TYPE = "textured_plate"
+TARGET_PRINTER = "Bambu Lab X1 Carbon"
+TARGET_NOZZLE_MM = 0.4
+
 MATERIALS: dict[str, dict[str, Any]] = {
     "PLA": {
         "aliases": ("pla", "pla+", "pla-plus"),
@@ -100,6 +105,17 @@ def material_list() -> str:
     return ", ".join(names[:-1]) + ", or " + names[-1]
 
 
+def resolve_print_material(explicit: str, part_material: str = "") -> str:
+    """Call material, then the part material, then PLA.
+
+    An unknown explicit name returns an empty string so the caller can reject it.
+    An unknown or empty part material falls through to PLA.
+    """
+    if explicit.strip():
+        return canonical_material(explicit) or ""
+    return canonical_material(part_material) or DEFAULT_MATERIAL
+
+
 def canonical_material(name: str) -> str | None:
     text = name.strip().lower().replace("_", "-")
     if not text:
@@ -119,14 +135,15 @@ def profile_notes(material: str) -> dict[str, Any] | None:
     notes.pop("aliases", None)
     return {
         "material": canonical,
-        "printer": "Bambu Lab X1 Carbon",
+        "printer": TARGET_PRINTER,
+        "nozzle_mm": TARGET_NOZZLE_MM,
         "slicer_family": "OrcaSlicer or Bambu Studio",
         "profile_applied": False,
         "sliced": False,
         "starting_notes": notes,
         "disclaimer": (
-            "Starting notes for a human to type into a slicer. "
+            f"Starting notes for a {TARGET_PRINTER} with a {TARGET_NOZZLE_MM:.1f} mm nozzle. "
             "Confirm them against the filament datasheet. "
-            "This server did not slice a file and did not start a printer."
+            "These notes are not an official Bambu profile and they do not start a printer."
         ),
     }

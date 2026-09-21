@@ -36,9 +36,9 @@
     }
   },
   "info": {
-    "description": "Tool contract for the techhand-print-fab MCP server. Clients speak MCP on stdio or Streamable HTTP at /mcp. These paths are not served as REST. Design tools stay dry-fire. fab_bambu_push_3mf dispatches a sliced .gcode.3mf only when dry_run is false, confirm is true, and BAMBU_PRINT_ENABLED=1. printer_dispatched is true only after the job is accepted. LAN Developer Mode is the print path. Credentials are environment variables, never this file.",
+    "description": "Tool contract for the techhand-print-fab MCP server. Clients speak MCP on stdio or Streamable HTTP at /mcp. These paths are not served as REST. Design tools stay dry-fire. fab_slice shells out to a local OrcaSlicer or Bambu Studio CLI when FAB_SLICER_PRESETS is set. It does not call the Bambu cloud. fab_bambu_push_3mf dispatches a sliced .gcode.3mf only when dry_run is false, confirm is true, and BAMBU_PRINT_ENABLED=1. printer_dispatched is true only after the job is accepted. LAN Developer Mode is the print path. Credentials are environment variables, never this file.",
     "title": "techhand-print-fab MCP tools",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -88,7 +88,7 @@
     },
     "/tools/fab_bambu_push_3mf": {
       "post": {
-        "description": "Upload a sliced .gcode.3mf and queue it, or hand an unsliced STL/3MF to Bambu Studio.\n\nprinter_dispatched is true only after the printer or Farm Manager accepts the job.\nAn upload that is not accepted stays false. dry_run defaults to true and does not\nupload or queue. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.\nRaw .gcode is not a job. LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the\nprint path. Farm Manager is used when transport is farm, or when BAMBU_FARM_URL is set\nand no LAN host is configured. Geometry-only STL and 3MF files are not sent. The tool\nwrites a Studio handoff and X1 Carbon profile notes. Firearm and other weapon-part\nrequests are refused. Training-tool and general fab jobs are in scope. Credentials\ncome from the process environment, not from the repo.",
+        "description": "Slice geometry when needed, then upload a .gcode.3mf or leave a Studio handoff.\n\nStanding defaults are PLA, a textured plate, and a Bambu X1 Carbon with a\n0.4 mm nozzle, unless the part or this call sets a material or bed.\nAn unsliced STL or 3MF is sliced with OrcaSlicer or Bambu Studio's CLI when\nthat program and FAB_SLICER_PRESETS are available. The CLI does not expand\ninherits. This server does not download a Bambu cloud profile. Studio handoff\nis the fallback when the CLI or the presets are missing. A sliced file that\nis newer than the mesh is uploaded as-is.\nprinter_dispatched is true only after the printer or Farm Manager accepts the job.\nAn upload that is not accepted stays false. dry_run defaults to true and does not\nupload or queue. A live push needs dry_run false, confirm true, and BAMBU_PRINT_ENABLED=1.\nRaw .gcode is not a job. LAN Developer Mode (MQTT 8883 and implicit FTPS 990) is the\nprint path. Farm Manager is used when transport is farm, or when BAMBU_FARM_URL is set\nand no LAN host is configured. Firearm and other weapon-part requests are refused.\nTraining-tool and general fab jobs are in scope. Credentials come from the process\nenvironment, not from the repo.",
         "operationId": "fab_bambu_push_3mf",
         "requestBody": {
           "content": {
@@ -115,8 +115,8 @@
                     "type": "boolean"
                   },
                   "bed_type": {
-                    "default": "auto",
-                    "description": "auto, hot_plate, textured_plate, cool_plate, or engineering_plate.",
+                    "default": "",
+                    "description": "Empty uses textured_plate. Also hot_plate, cool_plate, engineering_plate, or auto.",
                     "title": "Bed Type",
                     "type": "string"
                   },
@@ -158,7 +158,7 @@
                   },
                   "material": {
                     "default": "",
-                    "description": "PLA, PETG, ABS, ASA, TPU, PA, or PA-CF. Empty uses the part material. Notes are not a slicer profile.",
+                    "description": "PLA, PETG, ABS, ASA, TPU, PA, or PA-CF. Empty uses the part material, then PLA. Notes are not a slicer profile.",
                     "title": "Material",
                     "type": "string"
                   },
@@ -649,6 +649,74 @@
           }
         },
         "summary": "fab_param_model"
+      }
+    },
+    "/tools/fab_slice": {
+      "post": {
+        "description": "Slice a mesh to .gcode.3mf with OrcaSlicer or Bambu Studio's CLI.\n\nStanding defaults are PLA, a textured plate, and a Bambu X1 Carbon with a\n0.4 mm nozzle, unless the part or this call sets a material or bed.\nThe CLI runs only when it is on PATH (or ORCA_SLICER_BIN / BAMBU_STUDIO_BIN)\nand FAB_SLICER_PRESETS holds full JSON exports. The CLI does not expand\ninherits. This tool does not download a Bambu cloud profile and does not\nstart a printer. printer_dispatched stays false. When the CLI or the presets\nare missing, the result is a Bambu Studio handoff.",
+        "operationId": "fab_slice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "bed_type": {
+                    "default": "",
+                    "description": "Empty uses textured_plate. Also hot_plate, cool_plate, engineering_plate, or auto.",
+                    "title": "Bed Type",
+                    "type": "string"
+                  },
+                  "file_path": {
+                    "default": "",
+                    "description": "Optional .stl or geometry .3mf under the part directory, the project directory, or FAB_EXPORT_ROOTS. Empty uses a newer mesh than model.gcode.3mf when one exists, otherwise model.gcode.3mf, model.3mf, or model.stl. A parametric part with no mesh is exported to model.stl first.",
+                    "title": "File Path",
+                    "type": "string"
+                  },
+                  "intent": {
+                    "default": "",
+                    "description": "What this original training-tool or fab part is. Weapon-part requests are refused.",
+                    "title": "Intent",
+                    "type": "string"
+                  },
+                  "material": {
+                    "default": "",
+                    "description": "PLA, PETG, ABS, ASA, TPU, PA, or PA-CF. Empty uses the part material, then PLA. Notes are not a slicer profile.",
+                    "title": "Material",
+                    "type": "string"
+                  },
+                  "part_name": {
+                    "default": "",
+                    "description": "Part name or slug. Pair with project_id.",
+                    "title": "Part Name",
+                    "type": "string"
+                  },
+                  "project_id": {
+                    "default": "",
+                    "description": "Project id from fab_create_project. Pair with part_name.",
+                    "title": "Project Id",
+                    "type": "string"
+                  }
+                },
+                "title": "fab_sliceArguments",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolResult"
+                }
+              }
+            },
+            "description": "MCP tool result. printer_dispatched is true only after a sliced job is accepted."
+          }
+        },
+        "summary": "fab_slice"
       }
     },
     "/tools/fab_x1c_profile_notes": {

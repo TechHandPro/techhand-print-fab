@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Never
 
@@ -20,16 +21,25 @@ from techhand_print_fab.bambu_farm import FarmClient
 from techhand_print_fab.bambu_frames import build_project_file, safe_remote_name, task_label
 from techhand_print_fab.bambu_lan import send_lan
 from techhand_print_fab.bambu_status import fetch_lan_status
+from techhand_print_fab.exporting import ExportError, build_mesh, write_mesh_file
 from techhand_print_fab.policy import screen, screen_weapon
 from techhand_print_fab.print_files import (
+    SliceInfo,
     classify_mesh,
     handoff_directory,
     notes_for,
     resolve_mesh,
     write_handoff,
 )
-from techhand_print_fab.profiles import canonical_material, material_list
+from techhand_print_fab.profiles import (
+    TARGET_NOZZLE_MM,
+    TARGET_PRINTER,
+    material_list,
+    resolve_print_material,
+)
 from techhand_print_fab.results import print_result
+from techhand_print_fab.slicer import SliceAttempt, attempt_slice, slice_output_for
+from techhand_print_fab.spec import SpecError, normalize
 from techhand_print_fab.store import StoreError, get_store, slugify
 
 _BED_TYPES = frozenset({"auto", "hot_plate", "textured_plate", "cool_plate", "engineering_plate"})
@@ -37,6 +47,18 @@ _SERIAL = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
 _ACCESS = re.compile(r"^[A-Za-z0-9]{6,32}$")
 _DEVICE = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
 TransportName = Literal["lan", "farm"]
+
+
+@dataclass(frozen=True)
+class _Opened:
+    source: Path
+    info: SliceInfo
+    material: str
+    bed_type: str
+    notes: dict[str, Any] | None
+    part_dir: Path | None
+    part_name: str
+    mesh_warning: str
 
 
 def queue_print(
@@ -57,14 +79,13 @@ def queue_print(
     flow_cali: bool = True,
     vibration_cali: bool = True,
     timelapse: bool = False,
-    bed_type: str = "auto",
+    bed_type: str = "",
     queue_only: bool = False,
 ) -> dict[str, Any]:
     try:
         config = load_config()
     except BambuError as exc:
         return print_result(ok=False, message=str(exc), printer_dispatched=False, mode="print_error")
-    secrets = secret_values(config)
     try:
         payload = _queue(
             config,
@@ -103,10 +124,33 @@ def queue_print(
             printer_dispatched=False,
             mode="print_error",
         )
-    scrubbed = scrub_obj(payload, secrets)
-    if not isinstance(scrubbed, dict):
-        raise BambuError("Print result was empty.")
-    return scrubbed
+    return _scrub(payload)
+
+
+def slice_model(
+    *,
+    project_id: str = "",
+    part_name: str = "",
+    file_path: str = "",
+    material: str = "",
+    intent: str = "",
+    bed_type: str = "",
+) -> dict[str, Any]:
+    """Write a .gcode.3mf with a local slicer CLI, or a Studio handoff. Never prints."""
+    try:
+        payload = _slice_model(
+            project_id=project_id,
+            part_name=part_name,
+            file_path=file_path,
+            material=material,
+            intent=intent,
+            bed_type=bed_type,
+        )
+    except (BambuError, StoreError) as exc:
+        payload = print_result(ok=False, message=str(exc), printer_dispatched=False, mode="print_error")
+    if payload.get("printer_dispatched"):
+        raise BambuError("Slice cannot report a queued job.")
+    return _scrub(payload)
 
 
 def read_printer_status(*, transport: str = "", device_id: str = "") -> dict[str, Any]:
@@ -182,57 +226,56 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
     queue_only = _as_bool(kwargs["queue_only"], "queue_only")
     confirm = kwargs["confirm"] is True
     dry_run = _as_bool(kwargs["dry_run"], "dry_run")
-    bed_type = str(kwargs["bed_type"] or "auto").strip().lower()
-    if bed_type not in _BED_TYPES:
-        raise BambuError("bed_type must be auto, hot_plate, textured_plate, cool_plate, or engineering_plate.")
+    bed_type = _bed(str(kwargs["bed_type"] or ""))
     ams_slot = _slot(kwargs["ams_slot"])
     device_id = str(kwargs["device_id"] or "").strip()
     if device_id and _DEVICE.fullmatch(device_id) is None:
         raise BambuError("device_id must be 4 to 40 letters, digits, underscores, or hyphens.")
 
-    store = get_store()
-    project, record, part_dir, project_dir, reproduction = _load_part(store, project_id, part_name, file_path)
-    texts = _policy_texts(intent, file_path, part_name, project, record)
-    blocked = _blocked(texts, reproduction)
-    if blocked:
-        return blocked
-    chosen = _material(material, record)
-
-    source = resolve_mesh(file_path, part_dir=part_dir, project_dir=project_dir)
-    texts.append(source.name)
-    blocked = _blocked(texts, reproduction)
-    if blocked:
-        return blocked
-    info = classify_mesh(source)
-    notes = notes_for(chosen)
-    label = task_label(part_name or source.stem)
-    common = {
-        "profile_notes": notes,
-        "profile_applied": False,
-        "material": chosen,
-        "file": str(source),
-        "plate": plate,
-    }
+    opened = _open_mesh(
+        project_id=project_id,
+        part_name=part_name,
+        file_path=file_path,
+        material=material,
+        intent=intent,
+        bed_type=bed_type,
+    )
+    if isinstance(opened, dict):
+        return opened
+    source = opened.source
+    info = opened.info
+    part_dir = opened.part_dir
+    chosen = opened.material
+    bed_type = opened.bed_type
+    notes = opened.notes
+    slice_prefix = ""
+    profile_applied = False
+    slicer_name = ""
     if not info.sliced:
-        directory = write_handoff(
+        attempt = attempt_slice(
             source,
-            directory=handoff_directory(part_dir, source),
-            material_notes=notes,
+            slice_output_for(part_dir, source),
             material=chosen,
+            bed_type=bed_type,
         )
-        return print_result(
-            ok=True,
-            message=(
-                "Geometry file was not sent. A Bambu Studio handoff is next to the part, "
-                "with X1 Carbon profile notes. Slice it to a .gcode.3mf and queue that file."
-            ),
-            printer_dispatched=False,
-            mode="studio_handoff",
-            sliced=False,
-            handoff_dir=str(directory),
-            kind=info.kind,
-            **common,
-        )
+        if attempt.output is None:
+            return _fallback_result(opened, attempt, plate=plate)
+        source = attempt.output
+        info = classify_mesh(source)
+        profile_applied = attempt.profile_applied
+        slicer_name = attempt.slicer
+        slice_prefix = attempt.message + " "
+    label = task_label(part_name or source.stem)
+    common = _common(
+        notes=notes,
+        profile_applied=profile_applied,
+        material=chosen,
+        bed_type=bed_type,
+        source=source,
+        plate=plate,
+        slicer=slicer_name,
+        mesh_warning=opened.mesh_warning,
+    )
 
     if plate not in info.plates:
         raise BambuError(f"Plate {plate} is not in this file. Available plates: {list(info.plates)}.")
@@ -244,7 +287,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
             raise
         return print_result(
             ok=True,
-            message=str(exc),
+            message=_prefixed(slice_prefix, str(exc)),
             printer_dispatched=False,
             mode="dry_run" if dry_run else "print_plan",
             dry_run=dry_run,
@@ -306,7 +349,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
             mode = "print_plan"
         return print_result(
             ok=True,
-            message=message,
+            message=_prefixed(slice_prefix, message),
             printer_dispatched=False,
             mode=mode,
             dry_run=dry_run,
@@ -345,7 +388,7 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         message = "The printer accepted the sliced job."
     return print_result(
         ok=True,
-        message=message,
+        message=_prefixed(slice_prefix, message),
         printer_dispatched=True,
         mode="print_dispatch",
         sliced=True,
@@ -474,14 +517,218 @@ def _policy_texts(
     return texts
 
 
+def _slice_model(
+    *,
+    project_id: str,
+    part_name: str,
+    file_path: str,
+    material: str,
+    intent: str,
+    bed_type: str,
+) -> dict[str, Any]:
+    if len(intent) > 4000 or len(file_path) > 1024 or len(part_name) > 120:
+        raise BambuError("A print field is too long.")
+    opened = _open_mesh(
+        project_id=project_id,
+        part_name=part_name,
+        file_path=file_path,
+        material=material,
+        intent=intent,
+        bed_type=_bed(bed_type),
+    )
+    if isinstance(opened, dict):
+        return opened
+    if opened.info.sliced:
+        return print_result(
+            ok=True,
+            message="This file is already a sliced .gcode.3mf. No slicer was run and no printer job was sent.",
+            printer_dispatched=False,
+            mode="sliced",
+            sliced=True,
+            kind=opened.info.kind,
+            **_common(
+                notes=opened.notes,
+                profile_applied=False,
+                material=opened.material,
+                bed_type=opened.bed_type,
+                source=opened.source,
+                plate=1,
+                slicer="",
+                mesh_warning=opened.mesh_warning,
+            ),
+        )
+    attempt = attempt_slice(
+        opened.source,
+        slice_output_for(opened.part_dir, opened.source),
+        material=opened.material,
+        bed_type=opened.bed_type,
+    )
+    if attempt.output is None:
+        return _fallback_result(opened, attempt, plate=1)
+    info = classify_mesh(attempt.output)
+    return print_result(
+        ok=True,
+        message=attempt.message + " No printer job was sent.",
+        printer_dispatched=False,
+        mode="sliced",
+        sliced=True,
+        kind=info.kind,
+        **_common(
+            notes=opened.notes,
+            profile_applied=True,
+            material=opened.material,
+            bed_type=opened.bed_type,
+            source=attempt.output,
+            plate=1,
+            slicer=attempt.slicer,
+            mesh_warning=opened.mesh_warning,
+        ),
+    )
+
+
+def _open_mesh(
+    *,
+    project_id: str,
+    part_name: str,
+    file_path: str,
+    material: str,
+    intent: str,
+    bed_type: str,
+) -> _Opened | dict[str, Any]:
+    store = get_store()
+    project, record, part_dir, project_dir, reproduction = _load_part(store, project_id, part_name, file_path)
+    texts = _policy_texts(intent, file_path, part_name, project, record)
+    blocked = _blocked(texts, reproduction)
+    if blocked:
+        return blocked
+    chosen = _material(material, record)
+    warning = _ensure_geometry(part_dir, record, file_path)
+    source = resolve_mesh(file_path, part_dir=part_dir, project_dir=project_dir)
+    texts.append(source.name)
+    blocked = _blocked(texts, reproduction)
+    if blocked:
+        return blocked
+    return _Opened(
+        source=source,
+        info=classify_mesh(source),
+        material=chosen,
+        bed_type=bed_type,
+        notes=notes_for(chosen),
+        part_dir=part_dir,
+        part_name=part_name,
+        mesh_warning=warning,
+    )
+
+
+def _ensure_geometry(part_dir: Path | None, record: dict[str, Any] | None, file_path: str) -> str:
+    """Write model.stl from the parametric spec when the part has no mesh yet."""
+    if file_path.strip() or part_dir is None or record is None:
+        return ""
+    names = ("model.gcode.3mf", "model.3mf", "model.stl")
+    if any((part_dir / name).is_file() and not (part_dir / name).is_symlink() for name in names):
+        return ""
+    spec_raw = record.get("spec")
+    if not isinstance(spec_raw, dict):
+        return ""
+    try:
+        spec = normalize(spec_raw)
+        built = build_mesh(spec, part_dir / "model.scad")
+        write_mesh_file(built.mesh, part_dir / "model.stl", "stl", str(record.get("slug") or "part"))
+    except (SpecError, ExportError, OSError, ValueError) as exc:
+        raise BambuError(str(exc)) from exc
+    return built.warning
+
+
+def _fallback_result(opened: _Opened, attempt: SliceAttempt, *, plate: int) -> dict[str, Any]:
+    directory = write_handoff(
+        opened.source,
+        directory=handoff_directory(opened.part_dir, opened.source),
+        material_notes=opened.notes,
+        material=opened.material,
+        bed_type=opened.bed_type,
+        detail=attempt.message,
+    )
+    return print_result(
+        ok=attempt.ok,
+        message=attempt.message,
+        printer_dispatched=False,
+        mode=attempt.mode,
+        sliced=False,
+        handoff_dir=str(directory),
+        kind=opened.info.kind,
+        missing=list(attempt.missing),
+        **_common(
+            notes=opened.notes,
+            profile_applied=False,
+            material=opened.material,
+            bed_type=opened.bed_type,
+            source=opened.source,
+            plate=plate,
+            slicer=attempt.slicer,
+            mesh_warning=opened.mesh_warning,
+        ),
+    )
+
+
+def _common(
+    *,
+    notes: dict[str, Any] | None,
+    profile_applied: bool,
+    material: str,
+    bed_type: str,
+    source: Path,
+    plate: int,
+    slicer: str,
+    mesh_warning: str,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "profile_notes": notes,
+        "profile_applied": profile_applied,
+        "material": material,
+        "bed_type": bed_type,
+        "file": str(source),
+        "plate": plate,
+        "slicer": slicer,
+        "printer": TARGET_PRINTER,
+        "nozzle_mm": TARGET_NOZZLE_MM,
+    }
+    if mesh_warning:
+        fields["mesh_warning"] = mesh_warning
+    return fields
+
+
+def _prefixed(prefix: str, message: str) -> str:
+    if not prefix:
+        return message
+    return prefix + message
+
+
+def _scrub(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        secrets = secret_values(load_config())
+    except BambuError:
+        secrets = ()
+    scrubbed = scrub_obj(payload, secrets)
+    if not isinstance(scrubbed, dict):
+        raise BambuError("Print result was empty.")
+    return scrubbed
+
+
 def _material(material: str, record: dict[str, Any] | None) -> str:
-    if material.strip():
-        chosen = canonical_material(material)
-        if chosen is None:
-            raise BambuError(f"material must be {material_list()}.")
-        return chosen
     spec = record.get("spec") if record is not None and isinstance(record.get("spec"), dict) else {}
-    return canonical_material(str(spec.get("material") or "")) or ""
+    chosen = resolve_print_material(material, str(spec.get("material") or ""))
+    if not chosen:
+        raise BambuError(f"material must be {material_list()}.")
+    return chosen
+
+
+def _bed(bed_type: str) -> str:
+    text = bed_type.strip().lower()
+    if not text:
+        return "textured_plate"
+    if text not in _BED_TYPES:
+        raise BambuError("bed_type must be auto, hot_plate, textured_plate, cool_plate, or engineering_plate.")
+    return text
 
 
 def _missing_for(config: BambuConfig, transport_name: TransportName) -> list[str]:

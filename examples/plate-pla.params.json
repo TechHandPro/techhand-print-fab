@@ -1,0 +1,7 @@
+{
+  "kind": "plate",
+  "length_mm": 20,
+  "width_mm": 20,
+  "thickness_mm": 3,
+  "material": "PLA"
+}
