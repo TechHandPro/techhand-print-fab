@@ -8,15 +8,29 @@ Bambu cloud and does not ship a vendor profile.
 
 from __future__ import annotations
 
-import json
 import os
+import re
 import shutil
 import subprocess
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Never
+from typing import Literal, Never
 
 from techhand_print_fab.bambu_config import BambuError
+from techhand_print_fab.preset_expand import (
+    ExpandError,
+    PresetFileReport,
+    align_process_bed,
+    ensure_presets,
+    find_profile_root,
+    format_incomplete,
+    inspect_presets,
+    missing_reports,
+    preset_destination,
+    preset_paths,
+    presets_ready,
+)
 from techhand_print_fab.print_files import MAX_MESH_BYTES, plate_numbers
 from techhand_print_fab.profiles import (
     DEFAULT_BED_TYPE,
@@ -26,7 +40,6 @@ from techhand_print_fab.profiles import (
 )
 
 SLICE_TIMEOUT_S = 360
-_MAX_PRESET_BYTES = 2_000_000
 _ORCA_NAMES = ("orca-slicer", "OrcaSlicer")
 _BAMBU_NAMES = ("bambu-studio", "BambuStudio")
 _HIDDEN_ENV = frozenset(
@@ -62,6 +75,8 @@ class SliceAttempt:
     slicer: str
     profile_applied: bool
     missing: tuple[str, ...]
+    preset_files: tuple[dict[str, str], ...] = ()
+    sliced_plate: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,12 +90,15 @@ def fallback_help() -> str:
     """What to install when the CLI or the full presets are not ready."""
     return (
         "Headless slice needs OrcaSlicer or Bambu Studio's CLI "
-        "(orca-slicer or bambu-studio on PATH, or ORCA_SLICER_BIN / BAMBU_STUDIO_BIN) "
-        "and FAB_SLICER_PRESETS with full JSON exports: machine.json, process.json, "
+        "(orca-slicer or bambu-studio on PATH, or ORCA_SLICER_BIN / BAMBU_STUDIO_BIN). "
+        "Full presets live in FAB_SLICER_PRESETS or the local cache: machine.json, process.json, "
         "and filament/<MATERIAL>.json. The CLI does not expand inherits. "
-        "This server does not download Bambu cloud profiles. "
+        "techhand-print-fab --expand-presets flattens them from the installed slicer's "
+        "resources/profiles (FAB_SLICER_PROFILE_ROOT). "
+        "This server does not ship Bambu or Orca vendor profiles and does not call the Bambu cloud. "
         f"Standing defaults are {DEFAULT_MATERIAL}, {DEFAULT_BED_TYPE}, "
         f"{TARGET_PRINTER}, {TARGET_NOZZLE_MM:.1f} mm nozzle. "
+        f"process.json curr_bed_type is set to {_ORCA_BEDS[DEFAULT_BED_TYPE]} unless another bed is named. "
         "Bambu Studio can slice the handoff mesh until that CLI is set up."
     )
 
@@ -190,28 +208,71 @@ def attempt_slice(
     bed_type: str,
 ) -> SliceAttempt:
     binary = find_slicer()
-    root, root_problem = _preset_root()
-    missing: list[str] = []
-    problems: list[str] = []
-    if binary is None:
-        missing.append("orca-slicer or bambu-studio")
-        problems.append("No OrcaSlicer or Bambu Studio CLI is on PATH.")
-    elif binary.problem:
-        missing.append("orca-slicer or bambu-studio")
-        problems.append(binary.problem)
-    if root is None:
-        missing.append("FAB_SLICER_PRESETS")
-        problems.append(root_problem)
-    if missing or binary is None or root is None:
-        return _handoff(tuple(missing), f"{' '.join(problems)} {fallback_help()}", "")
-    presets, preset_problems = _load_presets(root, material)
-    if presets is None:
-        return _handoff(
-            tuple(preset_problems),
-            f"{' '.join(preset_problems)} {fallback_help()}",
-            slicer_label(binary.family),
+    dest, dest_problem = preset_destination()
+    if binary is None or binary.problem:
+        problem = binary.problem if binary is not None else "No OrcaSlicer or Bambu Studio CLI is on PATH."
+        reports = inspect_presets(dest, material) if dest is not None else missing_reports(material)
+        message = (
+            f"{problem}\n"
+            f"{format_incomplete(reports, dest, profile_root=None, profile_note='')}\n"
+            f"{fallback_help()}"
         )
-    return _invoke(binary, source, output, presets, material=material, bed_type=bed_type)
+        missing = ("orca-slicer or bambu-studio",) + _not_ready(reports)
+        return _handoff(missing, message, "", reports)
+    if dest is None:
+        reports = missing_reports(material)
+        message = (
+            f"{dest_problem}\n"
+            f"{format_incomplete(reports, None, profile_root=None, profile_note='')}\n"
+            f"{fallback_help()}"
+        )
+        return _handoff(_not_ready(reports), message, slicer_label(binary.family), reports)
+    reports = inspect_presets(dest, material)
+    profile_root: Path | None = None
+    profile_note = ""
+    if not presets_ready(reports):
+        profile_root, profile_note = find_profile_root(Path(binary.path))
+        if profile_root is not None:
+            try:
+                reports = ensure_presets(
+                    dest,
+                    profile_root,
+                    material,
+                    orca_bed_name(bed_type),
+                    force=False,
+                )
+            except ExpandError as exc:
+                profile_note = str(exc)
+            else:
+                profile_note = ""
+        if not presets_ready(reports):
+            message = (
+                f"{format_incomplete(reports, dest, profile_root=profile_root, profile_note=profile_note)}\n"
+                f"{fallback_help()}"
+            )
+            return _handoff(_not_ready(reports), message, slicer_label(binary.family), reports)
+    _machine, process, _filament = preset_paths(dest, material)
+    try:
+        align_process_bed(process, orca_bed_name(bed_type))
+    except ExpandError as exc:
+        reports = inspect_presets(dest, material)
+        message = (
+            f"{exc}\n"
+            f"{format_incomplete(reports, dest, profile_root=profile_root, profile_note='')}\n"
+            f"{fallback_help()}"
+        )
+        return _handoff(_not_ready(reports) or ("process.json",), message, slicer_label(binary.family), reports)
+    presets = _Presets(*preset_paths(dest, material))
+    reports = inspect_presets(dest, material)
+    return _invoke(
+        binary,
+        source,
+        output,
+        presets,
+        material=material,
+        bed_type=bed_type,
+        reports=reports,
+    )
 
 
 def slicer_label(family: SlicerFamily) -> str:
@@ -232,6 +293,7 @@ def _invoke(
     *,
     material: str,
     bed_type: str,
+    reports: tuple[PresetFileReport, ...],
 ) -> SliceAttempt:
     label = slicer_label(binary.family)
     if output.is_symlink():
@@ -264,26 +326,41 @@ def _invoke(
         )
     except subprocess.TimeoutExpired:
         _unlink(partial)
-        return _failed(label, f"{label} timed out after {SLICE_TIMEOUT_S} seconds.")
+        return _failed(label, f"{label} timed out after {SLICE_TIMEOUT_S} seconds.", reports)
     except OSError as exc:
         _unlink(partial)
-        return _failed(label, f"{label} could not be started ({exc.__class__.__name__}).")
+        return _failed(label, f"{label} could not be started ({exc.__class__.__name__}).", reports)
     if completed.returncode != 0 or not partial.is_file() or partial.is_symlink():
         _unlink(partial)
         detail = _tail(completed.stderr or completed.stdout)
         suffix = f" {detail}" if detail else ""
-        return _failed(label, f"{label} exited {completed.returncode} without a sliced file.{suffix}")
+        return _failed(label, f"{label} exited {completed.returncode} without a sliced file.{suffix}", reports)
     if partial.stat().st_size <= 0 or partial.stat().st_size > MAX_MESH_BYTES:
         _unlink(partial)
-        return _failed(label, f"{label} wrote an empty file or a file over 200 MB.")
+        return _failed(label, f"{label} wrote an empty file or a file over 200 MB.", reports)
     try:
         plates = plate_numbers(partial)
     except BambuError as exc:
         _unlink(partial)
-        return _failed(label, f"{label} did not write a sliced 3MF ({exc}).")
+        return _failed(label, f"{label} did not write a sliced 3MF ({exc}).", reports)
     if not plates:
         _unlink(partial)
-        return _failed(label, f"{label} did not write Metadata/plate_N.gcode.")
+        return _failed(label, f"{label} did not write Metadata/plate_N.gcode.", reports)
+    plate_name = orca_bed_name(bed_type) or ""
+    if plate_name:
+        try:
+            apply_bed_metadata(partial, plate_name)
+        except BambuError as exc:
+            _unlink(partial)
+            return _failed(label, str(exc), reports)
+        try:
+            plates = plate_numbers(partial)
+        except BambuError as exc:
+            _unlink(partial)
+            return _failed(label, f"{label} plate metadata could not be read ({exc}).", reports)
+        if not plates:
+            _unlink(partial)
+            return _failed(label, f"{label} lost Metadata/plate_N.gcode while setting the plate.", reports)
     if output.is_symlink() or (output.exists() and not output.is_file()):
         _unlink(partial)
         raise BambuError("Refusing to replace a sliced output that is not a regular file.")
@@ -292,21 +369,29 @@ def _invoke(
     except OSError as exc:
         _unlink(partial)
         raise BambuError("Could not move the sliced file into place.") from exc
+    plate_note = f" Plate metadata is {plate_name}." if plate_name else ""
     return SliceAttempt(
         ok=True,
         mode="sliced",
         message=(
             f"{label} wrote {output.name} for {TARGET_PRINTER}, "
-            f"{TARGET_NOZZLE_MM:.1f} mm nozzle, {material}, {bed_type}."
+            f"{TARGET_NOZZLE_MM:.1f} mm nozzle, {material}, {bed_type}.{plate_note}"
         ),
         output=output,
         slicer=label,
         profile_applied=True,
         missing=(),
+        preset_files=_report_rows(reports),
+        sliced_plate=plate_name,
     )
 
 
-def _handoff(missing: tuple[str, ...], message: str, slicer: str) -> SliceAttempt:
+def _handoff(
+    missing: tuple[str, ...],
+    message: str,
+    slicer: str,
+    reports: tuple[PresetFileReport, ...],
+) -> SliceAttempt:
     return SliceAttempt(
         ok=True,
         mode="studio_handoff",
@@ -315,10 +400,11 @@ def _handoff(missing: tuple[str, ...], message: str, slicer: str) -> SliceAttemp
         slicer=slicer,
         profile_applied=False,
         missing=missing,
+        preset_files=_report_rows(reports),
     )
 
 
-def _failed(slicer: str, message: str) -> SliceAttempt:
+def _failed(slicer: str, message: str, reports: tuple[PresetFileReport, ...] = ()) -> SliceAttempt:
     return SliceAttempt(
         ok=False,
         mode="slice_error",
@@ -327,6 +413,7 @@ def _failed(slicer: str, message: str) -> SliceAttempt:
         slicer=slicer,
         profile_applied=False,
         missing=(),
+        preset_files=_report_rows(reports),
     )
 
 
@@ -351,131 +438,96 @@ def _executable_file(value: str) -> Path | None:
     return path
 
 
-def _preset_root() -> tuple[Path | None, str]:
-    raw = os.environ.get("FAB_SLICER_PRESETS", "").strip()
-    if not raw:
-        return None, "FAB_SLICER_PRESETS is unset."
-    if len(raw) > 4096:
-        return None, "FAB_SLICER_PRESETS is too long."
-    path = Path(raw).expanduser()
+def _not_ready(reports: tuple[PresetFileReport, ...]) -> tuple[str, ...]:
+    return tuple(item.file for item in reports if item.status != "ok")
+
+
+def _report_rows(reports: tuple[PresetFileReport, ...]) -> tuple[dict[str, str], ...]:
+    return tuple(item.as_dict() for item in reports)
+
+
+_PLATE_LABELS = frozenset(
+    {
+        "Cool Plate",
+        "Engineering Plate",
+        "High Temp Plate",
+        "Hot Plate",
+        "Textured PEI Plate",
+        "Textured Cool Plate",
+        "Supertack Plate",
+    }
+)
+_PLATE_TOKENS = frozenset({"hot_plate", "textured_plate", "cool_plate", "engineering_plate"})
+_CURR_BED_JSON = re.compile(r'("curr_bed_type"\s*:\s*")([^"]*)(")')
+_BED_JSON = re.compile(r'("bed_type"\s*:\s*")([^"]*)(")')
+_CURR_BED_XML = re.compile(r'(key="curr_bed_type"\s+value=")([^"]*)(")')
+_BED_XML = re.compile(r'(key="bed_type"\s+value=")([^"]*)(")')
+_GCODE_BED = re.compile(r'^(\s*;\s*(?:curr_bed_type|bed_type)\s*=\s*)(.*?)(\s*)$', re.MULTILINE)
+
+
+def apply_bed_metadata(path: Path, bed_label: str) -> None:
+    """Rewrite the selected plate inside a sliced 3MF.
+
+    Orca can leave ``Cool Plate`` in ``slice_info.config``, ``project_settings.config``,
+    and the gcode header after ``--curr-bed-type``. The printer compares that
+    metadata with the physical plate.
+    """
+    if path.is_symlink():
+        raise BambuError("Refusing to rewrite sliced metadata through a symlink.")
+    temporary = path.with_name(f".{path.name}.bed")
+    if temporary.is_symlink():
+        raise BambuError("Refusing to rewrite sliced metadata through a symlink.")
+    if temporary.exists():
+        temporary.unlink()
     try:
-        resolved = path.resolve()
-    except OSError:
-        return None, "FAB_SLICER_PRESETS could not be resolved."
-    if not resolved.is_dir():
-        return None, "FAB_SLICER_PRESETS is not a directory."
-    return resolved, ""
+        with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(temporary, "w") as target:
+            for info in source.infolist():
+                data = source.read(info.filename)
+                target.writestr(info, _patch_member(info.filename, data, bed_label))
+        os.replace(temporary, path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        _unlink(temporary)
+        raise BambuError("Could not set the plate in the sliced file.") from exc
 
 
-def _load_presets(root: Path, material: str) -> tuple[_Presets | None, list[str]]:
-    problems: list[str] = []
-    machine = _regular_file(root, "machine.json")
-    process = _regular_file(root, "process.json")
-    filament = _regular_file(root, f"filament/{material}.json")
-    if filament is None:
-        filament = _regular_file(root, f"{material}.json")
-    if machine is None:
-        problems.append("machine.json is missing (regular file, not a symlink).")
-    else:
-        problems.extend(_check_machine(machine))
-    if process is None:
-        problems.append("process.json is missing (regular file, not a symlink).")
-    else:
-        problems.extend(_check_process(process))
-    if filament is None:
-        problems.append(f"filament/{material}.json is missing (regular file, not a symlink).")
-    else:
-        problems.extend(_check_filament(filament, material))
-    if problems or machine is None or process is None or filament is None:
-        return None, problems
-    return _Presets(machine, process, filament), []
+def _patch_member(name: str, data: bytes, bed_label: str) -> bytes:
+    lower = name.lower()
+    if not lower.startswith("metadata/"):
+        return data
+    if lower.endswith(".gcode"):
+        return _patch_gcode(data, bed_label)
+    if lower.endswith((".json", ".config", ".xml")):
+        return _patch_config(data, bed_label)
+    return data
 
 
-def _check_machine(path: Path) -> list[str]:
-    loaded, problem = _read_preset(path, "machine")
-    if loaded is None:
-        return [problem]
-    start = loaded.get("machine_start_gcode")
-    if isinstance(start, str) and start.strip():
-        return []
-    hint = ""
-    if loaded.get("inherits"):
-        hint = " The CLI does not expand inherits. Export the full preset from the slicer."
-    return [f"machine.json needs a machine_start_gcode string.{hint}"]
+def _patch_gcode(data: bytes, bed_label: str) -> bytes:
+    text = data.decode("utf-8", errors="replace")
+
+    def replace(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        value = match.group(2).strip()
+        if "curr_bed_type" in prefix.lower() or value in _PLATE_LABELS or value in _PLATE_TOKENS:
+            return f"{prefix}{bed_label}{match.group(3)}"
+        return match.group(0)
+
+    return _GCODE_BED.sub(replace, text).encode("utf-8")
 
 
-def _check_process(path: Path) -> list[str]:
-    loaded, problem = _read_preset(path, "process")
-    if loaded is None:
-        return [problem]
-    height = loaded.get("layer_height")
-    if isinstance(height, bool) or not isinstance(height, (int, float, str)) or not str(height).strip():
-        return ["process.json needs layer_height."]
-    return []
+def _patch_config(data: bytes, bed_label: str) -> bytes:
+    text = data.decode("utf-8", errors="replace")
+    text = _CURR_BED_JSON.sub(lambda match: f"{match.group(1)}{bed_label}{match.group(3)}", text)
+    text = _CURR_BED_XML.sub(lambda match: f"{match.group(1)}{bed_label}{match.group(3)}", text)
+    text = _BED_JSON.sub(lambda match: _replace_known_plate(match, bed_label), text)
+    text = _BED_XML.sub(lambda match: _replace_known_plate(match, bed_label), text)
+    return text.encode("utf-8")
 
 
-def _check_filament(path: Path, material: str) -> list[str]:
-    loaded, problem = _read_preset(path, "filament")
-    if loaded is None:
-        return [problem]
-    if _has_nozzle_temperature(loaded):
-        return []
-    hint = ""
-    if loaded.get("inherits"):
-        hint = " The CLI does not expand inherits. Export the full filament preset."
-    return [f"filament/{material}.json needs nozzle_temperature.{hint}"]
-
-
-def _read_preset(path: Path, expected_type: str) -> tuple[dict[str, Any] | None, str]:
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None, f"{path.name} could not be read."
-    if size <= 0 or size > _MAX_PRESET_BYTES:
-        return None, f"{path.name} is empty or over 2 MB."
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return None, f"{path.name} is not JSON."
-    if not isinstance(loaded, dict):
-        return None, f"{path.name} must be a JSON object."
-    if loaded.get("type") != expected_type:
-        return None, f'{path.name} needs "type": "{expected_type}".'
-    return loaded, ""
-
-
-def _has_nozzle_temperature(loaded: dict[str, Any]) -> bool:
-    for key in ("nozzle_temperature", "nozzle_temperature_initial_layer"):
-        value = loaded.get(key)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, (int, float)):
-            return True
-        if isinstance(value, str) and value.strip():
-            return True
-        if isinstance(value, list) and any(_temperature_item(item) for item in value):
-            return True
-    return False
-
-
-def _temperature_item(value: object) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, (int, float)):
-        return True
-    return isinstance(value, str) and bool(value.strip())
-
-
-def _regular_file(root: Path, relative: str) -> Path | None:
-    candidate = root.joinpath(*relative.split("/"))
-    if candidate.is_symlink() or not candidate.is_file():
-        return None
-    try:
-        resolved = candidate.resolve()
-        resolved.relative_to(root)
-    except (OSError, ValueError):
-        return None
-    return candidate
+def _replace_known_plate(match: re.Match[str], bed_label: str) -> str:
+    value = match.group(2)
+    if value in _PLATE_LABELS or value in _PLATE_TOKENS:
+        return f"{match.group(1)}{bed_label}{match.group(3)}"
+    return match.group(0)
 
 
 def _reject_separator(path: Path) -> None:

@@ -5,15 +5,17 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from techhand_print_fab.print_files import default_model_file
-from techhand_print_fab.slicer import build_slice_argv, orca_bed_name
+from techhand_print_fab.slicer import apply_bed_metadata, attempt_slice, build_slice_argv, orca_bed_name
 from techhand_print_fab.store import get_store
 from tests.bambu_support import write_sliced
 from tests.conftest import tool_payload
+from tests.test_preset_expand import write_profile_tree
 from tests.test_print_queue import ACCESS, _enable
 
 _CLOUD = ("bambulab.com", "api.bambulab", "bblcdn")
@@ -176,6 +178,10 @@ def test_inherits_only_preset_is_not_sliced(server, monkeypatch: pytest.MonkeyPa
     assert result["printer_dispatched"] is False
     assert "inherits" in result["message"]
     assert "machine_start_gcode" in result["message"]
+    files = {row["file"]: row["status"] for row in result["preset_files"]}
+    assert files["machine.json"] == "inherits"
+    assert files["process.json"] == "ok"
+    assert files["filament/PLA.json"] == "ok"
     assert calls == []
 
 
@@ -217,6 +223,9 @@ def test_fab_slice_writes_gcode_without_printing(server, monkeypatch: pytest.Mon
     assert result["bed_type"] == "textured_plate"
     assert result["slicer"] == "OrcaSlicer"
     assert result["nozzle_mm"] == 0.4
+    assert result["sliced_plate"] == "Textured PEI Plate"
+    process = json.loads((tmp_path / "presets" / "process.json").read_text(encoding="utf-8"))
+    assert process["curr_bed_type"] == "Textured PEI Plate"
     gcode = get_store().part_dir(project_id, "plate") / "model.gcode.3mf"
     assert gcode.is_file()
     assert not list(gcode.parent.glob(".model.gcode.3mf.partial"))
@@ -315,6 +324,9 @@ def test_explicit_bed_reaches_the_cli(server, monkeypatch: pytest.MonkeyPatch, t
     )
     assert result["bed_type"] == "cool_plate"
     assert result["mode"] == "sliced"
+    assert result["sliced_plate"] == "Cool Plate"
+    process = json.loads((tmp_path / "presets" / "process.json").read_text(encoding="utf-8"))
+    assert process["curr_bed_type"] == "Cool Plate"
     argv = calls[0]["argv"]
     assert isinstance(argv, list)
     assert argv[argv.index("--curr-bed-type") + 1] == "Cool Plate"
@@ -421,3 +433,178 @@ def test_unspecified_material_on_a_sliced_file_is_pla(server, monkeypatch: pytes
     assert result["printer"] == "Bambu Lab X1 Carbon"
     assert result["request"]["print"]["bed_type"] == "textured_plate"
     assert result["printer_dispatched"] is False
+
+
+def test_missing_presets_name_each_file(server, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    binary = tmp_path / "orca-slicer"
+    _binary(binary)
+    presets = tmp_path / "presets"
+    presets.mkdir()
+    monkeypatch.setenv("ORCA_SLICER_BIN", str(binary))
+    monkeypatch.setenv("FAB_SLICER_PRESETS", str(presets))
+    calls = _patch_run(monkeypatch)
+    monkeypatch.setattr("techhand_print_fab.exporting.openscad_executable", lambda: None)
+    project_id = _plate(server)
+    result = tool_payload(server, "fab_slice", {"project_id": project_id, "part_name": "plate"})
+    assert result["mode"] == "studio_handoff"
+    assert result["printer_dispatched"] is False
+    files = {row["file"]: row["status"] for row in result["preset_files"]}
+    assert files == {
+        "machine.json": "missing",
+        "process.json": "missing",
+        "filament/PLA.json": "missing",
+    }
+    assert "inherits" in result["message"]
+    assert "--expand-presets" in result["message"]
+    assert calls == []
+
+
+def test_inherits_with_start_gcode_is_still_not_sliced(
+    server, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install(monkeypatch, tmp_path)
+    machine = tmp_path / "presets" / "machine.json"
+    machine.write_text(
+        json.dumps(
+            {
+                "type": "machine",
+                "inherits": "fdm_bbl_3dp_001_common",
+                "machine_start_gcode": "G28\n",
+                "nozzle_diameter": ["0.4"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = _patch_run(monkeypatch)
+    monkeypatch.setattr("techhand_print_fab.exporting.openscad_executable", lambda: None)
+    project_id = _plate(server)
+    result = tool_payload(server, "fab_slice", {"project_id": project_id, "part_name": "plate"})
+    assert result["mode"] == "studio_handoff"
+    assert result["printer_dispatched"] is False
+    files = {row["file"]: row["status"] for row in result["preset_files"]}
+    assert files["machine.json"] == "inherits"
+    assert calls == []
+
+
+def test_fab_slice_expands_installed_profiles(server, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    binary = tmp_path / "orca-slicer"
+    _binary(binary)
+    write_profile_tree(tmp_path / "profiles")
+    monkeypatch.setenv("ORCA_SLICER_BIN", str(binary))
+    monkeypatch.delenv("FAB_SLICER_PRESETS", raising=False)
+    monkeypatch.setenv("FAB_SLICER_PROFILE_ROOT", str(tmp_path / "profiles"))
+    calls = _patch_run(monkeypatch)
+    monkeypatch.setattr("techhand_print_fab.exporting.openscad_executable", lambda: None)
+    project_id = _plate(server)
+    result = tool_payload(server, "fab_slice", {"project_id": project_id, "part_name": "plate"})
+    assert result["mode"] == "sliced"
+    assert result["profile_applied"] is True
+    assert result["printer_dispatched"] is False
+    assert result["sliced_plate"] == "Textured PEI Plate"
+    assert result["material"] == "PLA"
+    assert result["bed_type"] == "textured_plate"
+    cache = Path(os.environ["FAB_DATA_DIR"]) / "slicer-presets" / "x1c-0.4-pla-textured"
+    machine = json.loads((cache / "machine.json").read_text(encoding="utf-8"))
+    process = json.loads((cache / "process.json").read_text(encoding="utf-8"))
+    filament = json.loads((cache / "filament" / "PLA.json").read_text(encoding="utf-8"))
+    assert "inherits" not in machine
+    assert machine["machine_start_gcode"] == "START\n"
+    assert "inherits" not in process
+    assert process["curr_bed_type"] == "Textured PEI Plate"
+    assert "inherits" not in filament
+    assert filament["nozzle_temperature"] == ["220"]
+    argv = calls[0]["argv"]
+    assert isinstance(argv, list)
+    assert str(cache / "process.json") in argv[argv.index("--load-settings") + 1]
+
+
+def _cool_plate_archive(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    settings = {
+        "curr_bed_type": "Cool Plate",
+        "cool_plate_temp": ["35"],
+        "textured_plate_temp": ["55"],
+    }
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Metadata/plate_1.gcode", b"; curr_bed_type = Cool Plate\nG28\nG1 X1 Y1 E1\n")
+        archive.writestr(
+            "Metadata/slice_info.config",
+            '<config><plate><metadata key="curr_bed_type" value="Cool Plate"/></plate></config>',
+        )
+        archive.writestr("Metadata/project_settings.config", json.dumps(settings))
+
+
+def test_cool_plate_metadata_is_rewritten_to_textured(
+    server, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("techhand_print_fab.exporting.openscad_executable", lambda: None)
+    _install(monkeypatch, tmp_path)
+    process_path = tmp_path / "presets" / "process.json"
+    process = json.loads(process_path.read_text(encoding="utf-8"))
+    process["curr_bed_type"] = "Cool Plate"
+    process_path.write_text(json.dumps(process), encoding="utf-8")
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        _cool_plate_archive(Path(argv[argv.index("--export-3mf") + 1]))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr("techhand_print_fab.slicer.subprocess.run", fake_run)
+    project_id = _plate(server)
+    result = tool_payload(server, "fab_slice", {"project_id": project_id, "part_name": "plate"})
+    assert result["mode"] == "sliced"
+    assert result["sliced_plate"] == "Textured PEI Plate"
+    assert result["printer_dispatched"] is False
+    written = json.loads(process_path.read_text(encoding="utf-8"))
+    assert written["curr_bed_type"] == "Textured PEI Plate"
+    gcode = get_store().part_dir(project_id, "plate") / "model.gcode.3mf"
+    with zipfile.ZipFile(gcode) as archive:
+        header = archive.read("Metadata/plate_1.gcode").decode()
+        xml = archive.read("Metadata/slice_info.config").decode()
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+    assert "Textured PEI Plate" in header
+    assert "Cool Plate" not in header
+    assert 'value="Textured PEI Plate"' in xml
+    assert "Cool Plate" not in xml
+    assert settings["curr_bed_type"] == "Textured PEI Plate"
+    assert settings["cool_plate_temp"] == ["35"]
+    assert settings["textured_plate_temp"] == ["55"]
+
+
+def test_auto_bed_does_not_rewrite_cool_plate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    binary = tmp_path / "orca-slicer"
+    _binary(binary)
+    presets = tmp_path / "presets"
+    _presets(presets)
+    process_path = presets / "process.json"
+    process = json.loads(process_path.read_text(encoding="utf-8"))
+    process["curr_bed_type"] = "Cool Plate"
+    process_path.write_text(json.dumps(process), encoding="utf-8")
+    monkeypatch.setenv("ORCA_SLICER_BIN", str(binary))
+    monkeypatch.setenv("FAB_SLICER_PRESETS", str(presets))
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        _cool_plate_archive(Path(argv[argv.index("--export-3mf") + 1]))
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr("techhand_print_fab.slicer.subprocess.run", fake_run)
+    source = tmp_path / "model.stl"
+    source.write_bytes(b"stl")
+    output = tmp_path / "model.gcode.3mf"
+    attempt = attempt_slice(source, output, material="PLA", bed_type="auto")
+    assert attempt.ok is True
+    assert attempt.mode == "sliced"
+    assert attempt.sliced_plate == ""
+    assert json.loads(process_path.read_text(encoding="utf-8"))["curr_bed_type"] == "Cool Plate"
+    with zipfile.ZipFile(output) as archive:
+        assert b"Cool Plate" in archive.read("Metadata/slice_info.config")
+
+
+def test_apply_bed_metadata_leaves_other_plate_keys(tmp_path: Path) -> None:
+    path = tmp_path / "model.gcode.3mf"
+    _cool_plate_archive(path)
+    apply_bed_metadata(path, "Textured PEI Plate")
+    with zipfile.ZipFile(path) as archive:
+        settings = json.loads(archive.read("Metadata/project_settings.config"))
+        assert archive.read("Metadata/plate_1.gcode").startswith(b"; curr_bed_type = Textured PEI Plate\n")
+    assert settings["curr_bed_type"] == "Textured PEI Plate"
+    assert settings["cool_plate_temp"] == ["35"]

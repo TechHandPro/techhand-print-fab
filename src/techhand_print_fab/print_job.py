@@ -251,6 +251,8 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
     slice_prefix = ""
     profile_applied = False
     slicer_name = ""
+    preset_files: tuple[dict[str, str], ...] | None = None
+    sliced_plate = ""
     if not info.sliced:
         attempt = attempt_slice(
             source,
@@ -258,6 +260,8 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
             material=chosen,
             bed_type=bed_type,
         )
+        preset_files = attempt.preset_files
+        sliced_plate = attempt.sliced_plate
         if attempt.output is None:
             return _fallback_result(opened, attempt, plate=plate)
         source = attempt.output
@@ -275,6 +279,8 @@ def _queue(config: BambuConfig, **kwargs: Any) -> dict[str, Any]:
         plate=plate,
         slicer=slicer_name,
         mesh_warning=opened.mesh_warning,
+        preset_files=preset_files,
+        sliced_plate=sliced_plate,
     )
 
     if plate not in info.plates:
@@ -582,6 +588,8 @@ def _slice_model(
             plate=1,
             slicer=attempt.slicer,
             mesh_warning=opened.mesh_warning,
+            preset_files=attempt.preset_files,
+            sliced_plate=attempt.sliced_plate,
         ),
     )
 
@@ -666,6 +674,8 @@ def _fallback_result(opened: _Opened, attempt: SliceAttempt, *, plate: int) -> d
             plate=plate,
             slicer=attempt.slicer,
             mesh_warning=opened.mesh_warning,
+            preset_files=attempt.preset_files,
+            sliced_plate=attempt.sliced_plate,
         ),
     )
 
@@ -680,6 +690,8 @@ def _common(
     plate: int,
     slicer: str,
     mesh_warning: str,
+    preset_files: tuple[dict[str, str], ...] | None = None,
+    sliced_plate: str = "",
 ) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "profile_notes": notes,
@@ -694,6 +706,10 @@ def _common(
     }
     if mesh_warning:
         fields["mesh_warning"] = mesh_warning
+    if preset_files:
+        fields["preset_files"] = [dict(item) for item in preset_files]
+    if sliced_plate:
+        fields["sliced_plate"] = sliced_plate
     return fields
 
 

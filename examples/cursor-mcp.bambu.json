@@ -12,7 +12,8 @@
         "FAB_EXPORT_ROOTS": "",
         "ORCA_SLICER_BIN": "",
         "BAMBU_STUDIO_BIN": "",
-        "FAB_SLICER_PRESETS": ""
+        "FAB_SLICER_PRESETS": "",
+        "FAB_SLICER_PROFILE_ROOT": ""
       }
     }
   }

@@ -180,9 +180,20 @@ Normal parts do not need the Bambu Studio window. `fab_slice`, and `fab_bambu_pu
 A checkout without `orca-slicer` or `bambu-studio` on `PATH` gets the Studio handoff. Tests cover that fallback and a mocked CLI. A machine with the CLI and full presets slices for real.
 
 1. Install [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) or Bambu Studio so `orca-slicer` or `bambu-studio` is on `PATH`. `ORCA_SLICER_BIN` or `BAMBU_STUDIO_BIN` overrides that search. An explicit path that is not executable is an error. It is not replaced by another binary on `PATH`.
-2. In that slicer, pick Bambu Lab X1 Carbon, a 0.4 mm nozzle, your process (0.20 mm is a normal start), and the filament. Export the **full** printer, process, and filament JSON. The CLI does not expand `inherits`. A system preset that only points at a parent profile will not slice.
-3. Save them as `FAB_SLICER_PRESETS/machine.json` (`"type": "machine"` and a `machine_start_gcode` string), `process.json` (`"type": "process"` and `layer_height`), and `filament/PLA.json` (`"type": "filament"` and `nozzle_temperature`). Add `filament/PETG.json` and the other names when you use those spools. Files must be regular files inside that directory, not symlinks.
-4. Call `fab_slice` or `fab_bambu_push_3mf`. The server runs:
+2. Call `fab_slice`. When `machine.json`, `process.json`, or `filament/PLA.json` is missing or still has `inherits`, the server flattens the installed slicer's `resources/profiles` tree (next to the binary, or `FAB_SLICER_PROFILE_ROOT`). It looks up **Bambu Lab X1 Carbon 0.4 nozzle**, **0.20mm Standard @BBL X1C**, and **Bambu PLA Basic @BBL X1C**, drops `inherits`, and writes full files. Vendor profiles are not in git. An AppImage does not expose that tree; set `FAB_SLICER_PROFILE_ROOT` to the extracted `resources/profiles` directory.
+3. Those files land in `FAB_SLICER_PRESETS` when that variable is set, otherwise in `FAB_DATA_DIR/slicer-presets/x1c-0.4-pla-textured` (`~/.local/share/techhand-print-fab/slicer-presets/x1c-0.4-pla-textured` when `FAB_DATA_DIR` is unset). The same step is:
+
+```bash
+techhand-print-fab --expand-presets \
+  --profile-root /path/to/resources/profiles \
+  --out "$FAB_SLICER_PRESETS" \
+  --material PLA \
+  --bed textured_plate
+```
+
+Stock Bambu X1 Carbon profiles often keep **Cool Plate**. `--curr-bed-type` alone does not fix the sliced file: Orca still writes Cool Plate into `Metadata/slice_info.config`, `Metadata/project_settings.config`, and the gcode header. `fab_slice` writes `curr_bed_type` **Textured PEI Plate** into `process.json` before the CLI runs, then rewrites that selected plate in the 3MF. `sliced_plate` in the tool result is that name. Pass `bed_type: cool_plate` only when the physical plate is the cool plate. `auto` leaves the plate already stored in the preset.
+
+4. The server runs:
 
 ```bash
 orca-slicer model.stl \
@@ -196,11 +207,11 @@ orca-slicer model.stl \
   --curr-bed-type "Textured PEI Plate"
 ```
 
-`--curr-bed-type` follows the bed you passed: `textured_plate` → `Textured PEI Plate`, `hot_plate` → `High Temp Plate`, `cool_plate` → `Cool Plate`, `engineering_plate` → `Engineering Plate`. `auto` leaves the plate in the exported preset. Empty `bed_type` is `textured_plate`. Empty `material` uses the part material, then PLA.
+`--curr-bed-type` follows the bed you passed: `textured_plate` → `Textured PEI Plate`, `hot_plate` → `High Temp Plate`, `cool_plate` → `Cool Plate`, `engineering_plate` → `Engineering Plate`. `auto` leaves the plate already stored in the preset. Empty `bed_type` is `textured_plate`. Empty `material` uses the part material, then PLA.
 
-`profile_applied` is true only after that CLI writes `Metadata/plate_N.gcode`. This package does not ship a Bambu profile and does not call the Bambu cloud. A `.gcode.3mf` you sliced yourself keeps `profile_applied` false.
+`profile_applied` is true only after that CLI writes `Metadata/plate_N.gcode` and the plate metadata matches the bed you asked for. This package does not ship a Bambu profile and does not call the Bambu cloud. A `.gcode.3mf` you sliced yourself keeps `profile_applied` false.
 
-If the CLI or the presets are missing, or the preset is inherits-only, the tool writes `studio-handoff/` and does not invent a toolpath. If the CLI runs and fails, `mode` is `slice_error`, `printer_dispatched` stays false, and the handoff is still written. Printer secrets are stripped from the slicer process environment.
+If the CLI is missing, or the profile tree cannot be flattened, the tool writes `studio-handoff/` and `preset_files`. Each row is `machine.json`, `process.json`, or `filament/<MATERIAL>.json` with status `ok`, `missing`, `inherits`, or `invalid`. A file that still has `inherits` is not sliced, even when it also has `machine_start_gcode`. If the CLI runs and fails, `mode` is `slice_error`, `printer_dispatched` stays false, and the handoff is still written. Printer secrets are stripped from the slicer process environment.
 
 A newer `model.stl` or `model.3mf` replaces a stale `model.gcode.3mf` on the next slice or push. A newer `model.gcode.3mf` is sent as-is.
 
@@ -251,13 +262,14 @@ Secrets are process environment variables. This package does not read a vault fi
 | `FAB_EXPORT_ROOTS` | no | Directory that holds a sliced `.gcode.3mf` from Studio. |
 | `ORCA_SLICER_BIN` | no | OrcaSlicer CLI. Overrides `orca-slicer` on `PATH`. |
 | `BAMBU_STUDIO_BIN` | no | Bambu Studio CLI. Used when `ORCA_SLICER_BIN` is unset. |
-| `FAB_SLICER_PRESETS` | no | Directory of full `machine.json`, `process.json`, and `filament/<MATERIAL>.json`. |
+| `FAB_SLICER_PRESETS` | no | Directory of full `machine.json`, `process.json`, and `filament/<MATERIAL>.json`. Unset uses the local cache. |
+| `FAB_SLICER_PROFILE_ROOT` | no | Installed `resources/profiles` tree used to flatten `inherits`. A bad path is not replaced by a search. |
 
 `examples/cursor-mcp.bambu.json` ships those names with empty values. Fill them in the client config on the machine that runs the server.
 
 A live push also needs `dry_run: false` and `confirm: true`. The default `dry_run: true` uploads nothing and queues nothing.
 
-LAN upload uses implicit FTPS on port 990 and stores the file in `/model` when that directory exists. The start command is MQTT `print.project_file` with `url` `ftp:///model/<file>.gcode.3mf` and `param` `Metadata/plate_1.gcode`. The `md5` field is sent empty. `printer_dispatched` becomes true only after that command's ack is `success`, or after Farm Manager returns a task id. An upload that the printer does not accept stays `printer_dispatched: false`. Profile notes ride along in the tool result. `profile_applied` is true only when this process sliced with the local CLI and `FAB_SLICER_PRESETS`. It stays false for a file you sliced elsewhere. This package does not ship a Bambu profile and does not call the Bambu cloud.
+LAN upload uses implicit FTPS on port 990 and stores the file in `/model` when that directory exists. The start command is MQTT `print.project_file` with `url` `ftp:///model/<file>.gcode.3mf` and `param` `Metadata/plate_1.gcode`. The `md5` field is sent empty. `printer_dispatched` becomes true only after that command's ack is `success`, or after Farm Manager returns a task id. An upload that the printer does not accept stays `printer_dispatched: false`. Profile notes ride along in the tool result. `profile_applied` is true only when this process sliced with the local CLI. It stays false for a file you sliced elsewhere. `sliced_plate` is `Textured PEI Plate` for the standing textured bed. This package does not ship a Bambu profile and does not call the Bambu cloud.
 
 ### PRINT dogfood: test plate
 
@@ -270,7 +282,7 @@ Safe steps (no live push):
 3. `fab_bambu_status` against an unreachable host, still with no vault. **PASS for this fix:** `mode` is `print_error`, `printer_dispatched` is false, and the tool returns instead of raising. A live reading (`mode` `status`, with `nozzle_c`, `bed_c`, `state`, and `progress_percent`) waits on `BAMBU_ACCESS_CODE` and `BAMBU_SERIAL`. Injecting those from orange-secret or the vault is out of scope for this fix. Do not paste them. **FAIL:** the call raises, or `printer_dispatched` is true.
 4. `fab_create_project` with `name` `Test plate`.
 5. `fab_param_model` with `part_name` `plate` and `params` `{"kind":"plate","length_mm":20,"width_mm":20,"thickness_mm":3,"material":"PLA"}`. Omitting `material` is the same standing default.
-6. `fab_slice` on `plate` (or skip this and let step 7 slice). With `ORCA_SLICER_BIN` or `bambu-studio` and `FAB_SLICER_PRESETS` set, **PASS:** `mode` is `sliced`, `sliced` is true, `material` is `PLA`, `bed_type` is `textured_plate`, `nozzle_mm` is `0.4`, `profile_applied` is true, and `printer_dispatched` is false. **PASS without the CLI:** `mode` is `studio_handoff`, `printer_dispatched` is false, and `studio-handoff/HANDOFF.txt` names `FAB_SLICER_PRESETS`. **FAIL:** `printer_dispatched` is true, or the tool claims a slice it did not write.
+6. `fab_slice` on `plate` (or skip this and let step 7 slice). With `orca-slicer` or `bambu-studio` installed and its `resources/profiles` tree visible (or `FAB_SLICER_PROFILE_ROOT` set), you do not hand-copy JSON. **PASS:** `mode` is `sliced`, `sliced` is true, `material` is `PLA`, `bed_type` is `textured_plate`, `sliced_plate` is `Textured PEI Plate`, `nozzle_mm` is `0.4`, `profile_applied` is true, and `printer_dispatched` is false. The sliced 3MF must not say Cool Plate in `Metadata/slice_info.config` or `curr_bed_type`. **PASS without the CLI or without a profile tree:** `mode` is `studio_handoff`, `printer_dispatched` is false, and `preset_files` names `machine.json`, `process.json`, and `filament/PLA.json` with status `missing` or `inherits`. **FAIL:** `printer_dispatched` is true, `sliced_plate` is `Cool Plate` when the bed is textured, or the tool claims a slice it did not write.
 7. `fab_bambu_push_3mf` with that `project_id` and `part_name` (default `dry_run` true). **PASS with the CLI:** `mode` is `dry_run`, `sliced` is true, `request.print.bed_type` is `textured_plate`, `request.print.command` is `project_file`, and `printer_dispatched` is false. **PASS without the CLI:** `mode` is `studio_handoff` and `printer_dispatched` is false. **FAIL:** `printer_dispatched` is true.
 8. Only when step 6 was a Studio handoff: open the STL in Bambu Studio or OrcaSlicer. Pick X1 Carbon, a 0.4 mm nozzle, textured PEI, and PLA. Check the notes against the spool datasheet. Slice. Export `plate.gcode.3mf` into the part directory or a folder listed in `FAB_EXPORT_ROOTS`.
 9. `fab_bambu_push_3mf` with `file_path` of that sliced file, `material` `PLA`, and `dry_run` true. **PASS:** `mode` is `dry_run`, `printer_dispatched` is false, `request.print.command` is `project_file`, `request.print.bed_type` is `textured_plate`, and `request.print.md5` is empty. The access code is not in the result. **FAIL:** a file was uploaded or `printer_dispatched` is true.

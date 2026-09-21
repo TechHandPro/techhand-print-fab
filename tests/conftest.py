@@ -42,6 +42,7 @@ def isolated_store(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[S
         "ORCA_SLICER_BIN",
         "BAMBU_STUDIO_BIN",
         "FAB_SLICER_PRESETS",
+        "FAB_SLICER_PROFILE_ROOT",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FAB_DATA_DIR", str(tmp_path / "fab"))
